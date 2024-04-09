@@ -81,12 +81,31 @@ class ReLU:
             (vector) : Jacobian of the ReLU
         """
         return x > 0
+    
+class Softmax:
 
+    @staticmethod
+    def forward(x):
+        # x_shifted = x - np.max(x, axis=1, keepdims=True)
+    
+        # exp_mat = np.exp(x_shifted)
+
+        # sm_mat = exp_mat / np.sum(exp_mat, axis=1, keepdims=True)
+
+        # return sm_mat
+        x = x - np.max(x,axis=1)[:,np.newaxis]
+        exp = np.exp(x)
+        s = exp / np.sum(exp,axis=1)[:,np.newaxis]
+        return s
+
+    @staticmethod
+    def backward(x):
+        return Softmax.forward(x) * (1-Softmax.forward(x))
 
 ## LOSS FUNCTIONS
 
 class BCE:
-    """binary cross entropy"""
+    """binary cross entropy for binary classification"""
     @staticmethod
     def forward(y_pred,y_true):
         """
@@ -109,5 +128,21 @@ class BCE:
         ReturnsL
             (vector) : Jacobian wrt linear combination
         """
+        print(y_pred.shape)
 
         return y_pred - y_true
+    
+
+class CE:
+    """regular cross entropy for multi-class classification"""
+    @staticmethod
+    def forward(y_pred, y_true):
+        """y_true is a sparse array"""
+
+        return -np.sum(y_true * np.log(y_pred), axis=1)
+    
+    @staticmethod
+    def backward(y_pred, y_true):
+        return y_pred - y_true
+    
+
