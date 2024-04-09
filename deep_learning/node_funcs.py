@@ -104,7 +104,8 @@ class Softmax:
 
 ## LOSS FUNCTIONS
 
-class BCE:
+class BCE: 
+    name = "Binary Cross Entropy"
     """binary cross entropy for binary classification"""
     @staticmethod
     def forward(y_pred,y_true):
@@ -134,6 +135,7 @@ class BCE:
     
 
 class CE:
+    name = "Cross Entropy"
     """regular cross entropy for multi-class classification"""
     @staticmethod
     def forward(y_pred, y_true):
@@ -145,4 +147,4 @@ class CE:
     def backward(y_pred, y_true):
         return y_pred - y_true
     
-
+    

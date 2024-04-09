@@ -61,7 +61,9 @@ class NN:
             batch_size=None, 
             learning_rate=1, 
             reg_strength=0.0001,
-            num_epochs=30):
+            num_epochs=30,
+            verbose = True,
+            display = True):
         """Fits the neural network to the data.
         
         Args:
@@ -73,7 +75,8 @@ class NN:
             learning_rate (numeric) : learning rate for gradient descent
             reg_strength (numeric) : multiplier for regularization in gradient descent
             num_epochs (int) : number of cycles through the training data
-            dev_share (float, [0,1)) : share of training data set aside dev set
+            verbose (bool, default = True) : whether or not to print training loss after each epoch
+            display (bool, default = True) : whether or not to plot training (and dev) average loss after each epoch
         """
         # attributes
         self.batch_size = batch_size
@@ -88,8 +91,8 @@ class NN:
         if self.loss == None:
             raise Exception("Please declare a loss function for a layer")
 
-        if X_dev or y_dev:
-            if not (X_dev and y_dev):
+        if (X_dev is not None) or (y_dev is not None):
+            if not (X_dev is not None and y_dev is not None):
                 raise Exception("Please input both X_dev and y_dev")
             else:
                 self.dev_flag = True
@@ -106,6 +109,13 @@ class NN:
         # initialize lists for
         self.cost_train = []
         self.cost_dev = []
+        
+        # set up loss plot
+        if display:
+            fig, ax = plt.subplots()
+            ax.set_title(f"Average Loss ({self.loss.name}) vs. Epoch")
+            ax.set_xlabel("Epoch")
+            ax.set_ylabel("Average Loss")
 
         # go through the epochs
         for epoch in range(num_epochs):
@@ -116,8 +126,13 @@ class NN:
             if self.dev_flag:
                 self.cost_dev.append(self.avg_loss(X_dev, y_dev))
 
-            # TODO: update the cost graph if applicable
-            #self.update_training_graph()
+            if verbose:
+                print(f"Training Avg Loss: {self.cost_train[-1]}")
+                
+            if display:
+                # epoch in loop indexed at 0, add 1 to start indexing at 1
+                true_epoch = epoch+1
+                self.update_training_plot(fig, ax, true_epoch, num_epochs)
 
     def get_initial_params(self):
         """Create the initial parameters dictionary for the neural network starting at idx 1
@@ -260,6 +275,30 @@ class NN:
 
         return grad_dict
 
+    def update_training_plot(self, fig, ax, epoch, num_epochs):
+        """Updates training plot to display average losses
+
+        Args:
+            fig (matplotlib.pyplot.figure) : figure containing plot axis
+            ax (matplotlib.pyplot.axis) : axis that contains line plots
+            epoch (int) : epoch number to graph new data for
+            num_epochs (int) : total number of epochs
+        """
+        
+        if epoch == 1:
+            self.train_line, = ax.plot(range(1,epoch+1), self.cost_train, label="Average training loss")
+            if self.dev_flag:
+                self.dev_line, = ax.plot(range(1, epoch+1), self.cost_dev, label="Average dev loss")
+            ax.legend()
+        else:
+            self.train_line.set_data(range(1,epoch+1), self.cost_train)
+            if self.dev_flag:
+                self.dev_line.set_data(range(1,epoch+1), self.cost_dev)
+
+        max_val = np.max(np.concatenate([self.cost_dev, self.cost_train]))
+        ax.set(xlim=[0,num_epochs], ylim=[0,max_val])
+        plt.pause(.1)
+
     def evaluate(self, X_test, y_test):
         # calculate activation values for each layer (includes predicted values)
         za_vals = self.forward_prop(X_test)
@@ -270,11 +309,4 @@ class NN:
 
         return accuracy
     
-def main():
-    test_nn = NN()
-
-    # NN.add_layer(layer_size=)
-
-if __name__ == "__main__":
-    main()
 
