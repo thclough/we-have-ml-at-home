@@ -325,6 +325,8 @@ class NN:
         """Calculate accuracy of inference for given examples and their ground truths
         
         Args:
+            X_test (numpy array) : array of examples
+            y_test (numpy array) : array of ground truth labels in sparse form
 
         Returns:
             accuracy (float) : accuracy of prediction
