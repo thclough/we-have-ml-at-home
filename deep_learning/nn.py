@@ -299,14 +299,45 @@ class NN:
         ax.set(xlim=[0,num_epochs], ylim=[0,max_val])
         plt.pause(.1)
 
-    def evaluate(self, X_test, y_test):
-        # calculate activation values for each layer (includes predicted values)
-        za_vals = self.forward_prop(X_test)
+    def predict(self, X_examples):
+        """Predict labels of given X examples
+        
+        Args:
+            X_examples (numpy array) : array of examples by row
 
-        # gather predicted values
-        y_pred = za_vals[f"a{self.num_layers-1}"] > .5
-        accuracy = (np.argmax(y_pred,axis=1) == np.argmax(y_test,axis=1)).sum() * (1. / y_test.shape[0])
+        Returns:
+            predictions (numpy array) : array of prediction for each example by row
+        
+        """
+        # calculate activation values for each layer (includes predicted values)
+        za_vals = self.forward_prop(X_examples)
+
+        final_activations =  za_vals[f"a{self.num_layers-1}"]
+
+        if self.loss == node_funcs.BCE:
+            predictions = final_activations > .5
+        else:
+            predictions = np.argmax(final_activations, axis=1)
+
+        return predictions
+
+    def evaluate(self, X_test, y_test):
+        """Calculate accuracy of inference for given examples and their ground truths
+        
+        Args:
+
+        Returns:
+            accuracy (float) : accuracy of prediction
+        
+        """
+        predictions = self.predict(X_test)
+        
+        if self.loss == node_funcs.BCE:
+            accuracy = (predictions == y_test).sum() * (1. / y_test.shape[0])
+        else:
+            accuracy = (predictions == np.argmax(y_test,axis=1)).sum() * (1. / y_test.shape[0])
 
         return accuracy
+    
     
 
