@@ -1,13 +1,15 @@
+#%%
 import numpy as np
 import matplotlib.pyplot as plt
+#from we_have_ml_at_home.deep_learning import node_funcs
 import node_funcs
 
-
-## TODO
-### Graph for loss vs epoch
-### different types of regularization
-### different types of loss
-### learning rate schedulers
+# TODO
+## forward pass/za vals optimization(only store last layers), predictions and average loss
+## Chunk fit
+## different types of regularization
+## different types of loss
+## learning rate schedulers/optimizers
 
 class NN:
     """Simple neural network class"""
@@ -62,8 +64,8 @@ class NN:
             learning_rate=1, 
             reg_strength=0.0001,
             num_epochs=30,
-            verbose = True,
-            display = True):
+            verbose=True,
+            display=True):
         """Fits the neural network to the data.
         
         Args:
@@ -78,6 +80,7 @@ class NN:
             verbose (bool, default = True) : whether or not to print training loss after each epoch
             display (bool, default = True) : whether or not to plot training (and dev) average loss after each epoch
         """
+
         # attributes
         self.batch_size = batch_size
         self.learning_rate = learning_rate
@@ -104,7 +107,7 @@ class NN:
             self.batch_size = n_train
 
         # get the initial weights and biases
-        self.get_initial_params()
+        self.get_initial_params() # use current params
 
         # initialize lists for
         self.cost_train = []
@@ -132,7 +135,24 @@ class NN:
             if display:
                 # epoch in loop indexed at 0, add 1 to start indexing at 1
                 true_epoch = epoch+1
-                self.update_training_plot(fig, ax, true_epoch, num_epochs)
+                self.update_epoch_plot(fig, ax, true_epoch, num_epochs)
+
+    def chunk_fit(self, chunk_generator, epochs=30, verbose=True, display=True):
+        """Feeds data from chunk generator into model for training
+        
+        """
+
+        for data in chunk_generator:
+            X_tr, y_tr, X_dev, y_dev, X_test, y_test = data
+            pass
+        # if pass data generator batch size becomes None and use gd function
+        # avg cost train and cost dev for the before you update display for the epoch or put somewhere else then average, cost_train_batch, 
+            # should you make a whole new type of graph? after a few passes 
+            # maybe change the mechanics of avg_loss to update after every batch
+        # where to put this for loop for data generator to preserve code?
+
+        # different dev at different times, dividing on the whole set, vs diving multiple times on a fragment
+        # just pull batch out of chunk_generator and 
 
     def get_initial_params(self):
         """Create the initial parameters dictionary for the neural network starting at idx 1
@@ -163,7 +183,7 @@ class NN:
         """
         n = len(X_train)
 
-        # go through the batches for ea
+        # go through the batches
         for start_idx in range(0,n-1,self.batch_size):
             end_idx = min(start_idx + self.batch_size, n)
             
@@ -171,16 +191,21 @@ class NN:
             X_train_batch = X_train[start_idx:end_idx]
             y_train_batch = y_train[start_idx:end_idx]
 
-            # forward pass
-            node_vals_batch = self.forward_prop(X_train_batch)
+            # create batch_total_pass, just return this
+            self.batch_total_pass(X_train_batch, y_train_batch)
 
-            # perform back prop to obtain gradients
-            grad_dict = self.backward_prop(X_train_batch, y_train_batch, node_vals_batch)
+    def batch_total_pass(self, X_train_batch, y_train_batch):
+        """forward propagation, backward propagation and parameter updates for """
+        # forward pass
+        node_vals_batch = self.forward_prop(X_train_batch)
 
-            # update params
-            for param in self.params:
-                self.params[param] = self.params[param] - (self.learning_rate * grad_dict[param])
-        
+        # perform back prop to obtain gradients
+        grad_dict = self.backward_prop(X_train_batch, y_train_batch, node_vals_batch)
+
+        # update params
+        for param in self.params:
+            self.params[param] = self.params[param] - (self.learning_rate * grad_dict[param])
+
     def forward_prop(self, X_train):
         """Perform forward pass in neural net. 
         
@@ -191,7 +216,7 @@ class NN:
             za_vals (dictionary) : dictionary of node precursors and activation values
                 where "an" or "an" would correspond to the nth layer indexed at 0
         """
-
+        
         # to hold activation values (a)
         za_vals = {}
 
@@ -228,6 +253,7 @@ class NN:
 
         # gather predicted values
         y_pred = za_vals[f"a{self.num_layers-1}"]
+
         # return avg of the losses
         return np.mean(self.loss.forward(y_pred, y))
         
@@ -255,8 +281,6 @@ class NN:
             activation = self.layers[layer]["activation"]
 
             W = self.params[f"W{layer}"]
-
-            # W_ahead = dJ_dz_past = 1
             
             # find dJ/dz for the layer
             if layer == self.num_layers-1:
@@ -275,7 +299,7 @@ class NN:
 
         return grad_dict
 
-    def update_training_plot(self, fig, ax, epoch, num_epochs):
+    def update_epoch_plot(self, fig, ax, epoch, num_epochs):
         """Updates training plot to display average losses
 
         Args:
@@ -341,5 +365,8 @@ class NN:
 
         return accuracy
     
-    
+
+
+
+
 
