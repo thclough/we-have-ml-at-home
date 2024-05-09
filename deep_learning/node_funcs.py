@@ -80,7 +80,34 @@ class ReLU:
         Returns:
             (vector) : Jacobian of the ReLU
         """
-        return x > 0
+        return x >= 0
+    
+class LeakyReLU:
+
+    @staticmethod
+    def forward(x):
+        """Leaky rectified linear unit: max(0.1*input,input)
+        
+        Args:
+            x (vector): input vector ofLeaky ReLU
+        
+        Returns:
+            (vector) : Leaky ReLU output
+        
+        """
+        return np.maximum(0.1*x,x)
+    
+    @staticmethod
+    def backward(x):
+        """Jacobian of leaky ReLU
+        
+        Args:
+            x (vector) : input of Leaky ReLU
+        
+        Returns:
+            (vector) : Jacobian of the Leaky ReLU
+        """
+        return np.where(x < 0, 0.1, 1)
     
 class Softmax:
 
@@ -129,11 +156,8 @@ class BCE:
         ReturnsL
             (vector) : Jacobian wrt linear combination
         """
-        print(y_pred.shape)
-
         return y_pred - y_true
     
-
 class CE:
     name = "Cross Entropy"
     """regular cross entropy for multi-class classification"""
@@ -141,7 +165,7 @@ class CE:
     def forward(y_pred, y_true):
         """y_true is a sparse array"""
 
-        return -np.sum(y_true * np.log(y_pred), axis=1)
+        return -np.sum(y_true * np.log1p(y_pred), axis=1)
     
     @staticmethod
     def backward(y_pred, y_true):

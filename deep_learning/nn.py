@@ -123,7 +123,6 @@ class NN:
         # go through the epochs
         for epoch in range(num_epochs):
             self.gradient_descent_epoch(X_train, y_train)
-
             # calculate avg loss for dev and test sets
             self.cost_train.append(self.avg_loss(X_train, y_train))
             if self.dev_flag:
@@ -198,10 +197,10 @@ class NN:
         """forward propagation, backward propagation and parameter updates for """
         # forward pass
         node_vals_batch = self.forward_prop(X_train_batch)
-
+        
         # perform back prop to obtain gradients
         grad_dict = self.backward_prop(X_train_batch, y_train_batch, node_vals_batch)
-
+        
         # update params
         for param in self.params:
             self.params[param] = self.params[param] - (self.learning_rate * grad_dict[param])
@@ -238,6 +237,8 @@ class NN:
             # za_vals[f"z{web_idx}"] = a_behind.dot(W) + b
             # za_vals[f"a{web_idx}"] = activation_func.forward(za_vals[f"z{web_idx}"])
         
+        #print(za_vals[f"a{self.num_layers-2}"])
+    
         return za_vals
 
     def avg_loss(self, X, y):
@@ -253,7 +254,11 @@ class NN:
 
         # gather predicted values
         y_pred = za_vals[f"a{self.num_layers-1}"]
+        
+        # print(za_vals[f"z{self.num_layers-2}"])
+        # print(y_pred)
 
+        #raise KeyError
         # return avg of the losses
         return np.mean(self.loss.forward(y_pred, y))
         
