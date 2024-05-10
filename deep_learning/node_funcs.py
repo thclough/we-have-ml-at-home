@@ -169,6 +169,6 @@ class CE:
     
     @staticmethod
     def backward(y_pred, y_true):
-        return y_pred - y_true
+        return y_pred - y_true 
     
     

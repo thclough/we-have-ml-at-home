@@ -65,7 +65,7 @@ class Chunk:
                 
                 X_data, y_data = self.data_label_split(chunk)
                 if make_sparse:
-                    X_data = OneHotArray(shape=(len(X_data),sparse_dim),idx_array=X_data) # how to deal with splitting this
+                    X_data = OneHotArray(shape=(len(X_data),sparse_dim),idx_array=X_data)
                 X_train, y_train, X_dev, y_dev, X_test, y_test = self.tdt_split(X_data, y_data, shuffled_idxs, tdt_sizes)
 
                 yield X_train, y_train, X_dev, y_dev, X_test, y_test
@@ -161,7 +161,6 @@ class OneHotArray:
     Attributes:
 
     """
-
     def __init__(self, shape, idx_array=None, oha_dict=None):
         """
         Args:
