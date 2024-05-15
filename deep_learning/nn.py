@@ -11,7 +11,7 @@ import node_funcs
 ## different types of loss
 ## learning rate schedulers/optimizers
 
-class NN:
+class SmoothNN:
     """Simple neural network class"""
     def __init__(self):
         # layers list 
@@ -19,7 +19,7 @@ class NN:
         self.num_layers = 0
         self.loss=None
 
-    def add_layer(self, layer_size: int, activation=None, loss=None):
+    def add_layer(self, layer_size, activation=None, loss=None):
         """Add layer to the neural network
         
         Args:
@@ -88,11 +88,7 @@ class NN:
         self.dev_flag = False # flag if there is a dev set
 
         # validate inputs def validate_structure
-        if self.num_layers == 0:
-            raise Exception("No layers in network")
-
-        if self.loss == None:
-            raise Exception("Please add a loss function")
+        self._val_structure
 
         if (X_dev is not None) or (y_dev is not None):
             if not (X_dev is not None and y_dev is not None):
@@ -107,9 +103,9 @@ class NN:
             self.batch_size = n_train
 
         # get the initial weights and biases
-        self.get_initial_params() # use current params
+        self._get_initial_params() # use current params
 
-        # initialize lists for
+        # initialize lists for costs
         self.cost_train = []
         self.cost_dev = []
         
@@ -122,7 +118,7 @@ class NN:
 
         # go through the epochs
         for epoch in range(num_epochs):
-            self.gradient_descent_epoch(X_train, y_train)
+            self._gradient_descent_epoch(X_train, y_train)
             # calculate avg loss for dev and test sets
             self.cost_train.append(self.avg_loss(X_train, y_train))
             if self.dev_flag:
@@ -134,45 +130,17 @@ class NN:
             if display:
                 # epoch in loop indexed at 0, add 1 to start indexing at 1
                 true_epoch = epoch+1
-                self.update_epoch_plot(fig, ax, true_epoch, num_epochs)
+                self._update_epoch_plot(fig, ax, true_epoch, num_epochs)
 
-    def chunk_fit(self, 
-                  chunk_generator, 
-                  learning_rate=1, 
-                  reg_strength=0.0001,
-                  num_epochs=30,
-                  verbose=True, 
-                  display=True):
-        """Feeds data from chunk generator into model for training"""
-        
-        # set attributes
-        self.learning_rate = learning_rate
-        self.reg_strength = reg_strength
-
-        # validate inputs
+    def _val_structure(self):
+        """validate the structure of the the NN"""
         if self.num_layers == 0:
             raise Exception("No layers in network")
 
         if self.loss == None:
             raise Exception("Please add a loss function")
-
-        # get initial params
-        self.get_initial_params() # use current params
-
-        for epoch in range(num_epochs):
-            for data in chunk_generator:
-                X_train, y_train, X_dev, y_dev, _, _ = data
-                self.batch_total_pass(X_train, y_train)
-                
-                # get training and test loss
-                pass
-        # if pass data generator batch size becomes None and use gd function
-        # avg cost train and cost dev for the before you update display for the epoch or put somewhere else then average, cost_train_batch, 
-            # should you make a whole new type of graph? after a few passes 
-            # maybe change the mechanics of avg_loss to update after every batch
-        # where to put this for loop for data generator to preserve code?
-
-    def get_initial_params(self):
+        
+    def _get_initial_params(self):
         """Create the initial parameters dictionary for the neural network starting at idx 1
         
         Populates self.params dictionary with W (weights) and b (biases) in the form of numpy arrays
@@ -191,7 +159,7 @@ class NN:
             self.params[f"W{layer_idx}"] = np.random.normal(size=(input_size, output_size))
             self.params[f"b{layer_idx}"] = np.zeros(shape=output_size)
 
-    def gradient_descent_epoch(self, X_train, y_train):
+    def _gradient_descent_epoch(self, X_train, y_train):
         """Performs one epoch of gradient descent to update the params dictionary
         
         Args:
@@ -210,21 +178,21 @@ class NN:
             y_train_batch = y_train[start_idx:end_idx]
 
             # create batch_total_pass, just return this
-            self.batch_total_pass(X_train_batch, y_train_batch)
+            self._batch_total_pass(X_train_batch, y_train_batch)
 
-    def batch_total_pass(self, X_train_batch, y_train_batch):
+    def _batch_total_pass(self, X_train_batch, y_train_batch):
         """forward propagation, backward propagation and parameter updates for """
         # forward pass
-        node_vals_batch = self.forward_prop(X_train_batch)
+        node_vals_batch = self._forward_prop(X_train_batch)
 
         # perform back prop to obtain gradients
-        grad_dict = self.backward_prop(X_train_batch, y_train_batch, node_vals_batch)
+        grad_dict = self._backward_prop(X_train_batch, y_train_batch, node_vals_batch)
         
         # update params
         for param in self.params:
             self.params[param] = self.params[param] - (self.learning_rate * grad_dict[param])
 
-    def forward_prop(self, X_train):
+    def _forward_prop(self, X_train):
         """Perform forward pass in neural net while storing intermediaries. 
         
         Args: 
@@ -255,49 +223,7 @@ class NN:
     
         return za_vals
 
-    def predict_prob(self, X_train):
-        """Obtain output layer activations
-        
-        Args: 
-            X_train (numpy array) : training examples (num_examples x num_features)
-        
-        Returns:
-            cur_a (numpy array) : probabilities of output layer
-        """
-
-        # set the data as "a0"
-        a_behind = X_train
-
-        # go through the layers and save the activations
-        for layer in range(self.num_layers-1):
-            web_idx = layer + 1
-
-            activation_func = self.layers[web_idx]["activation"]
-            W = self.params[f"W{web_idx}"]
-            b = self.params[f"b{web_idx}"]
-
-            cur_z = a_behind @ W + b
-            cur_a = activation_func.forward(cur_z)
-
-            a_behind = cur_a
-
-        return cur_a
-    
-    def avg_loss(self, X, y):
-        """Calculate the average loss depending on the loss function
-        
-        Args:
-            X (numpy array) : examples to predict on (num_examples x num_features)
-            y (numpy array) : true labels (num_examples x 1)
-        
-        """
-        # calculate activation values for each layer (includes predicted values)
-        y_pred = self.predict_prob(X)
-
-        # return avg of the losses
-        return np.mean(self.loss.forward(y_pred, y))
-        
-    def backward_prop(self, X, y, za_vals):
+    def _backward_prop(self, X, y, za_vals):
         """perform backprop
         
         Args:
@@ -338,8 +264,50 @@ class NN:
             W_ahead = W
 
         return grad_dict
+    
+    def predict_prob(self, X):
+        """Obtain output layer activations
+        
+        Args: 
+            X (numpy array) : examples (num_examples x num_features)
+        
+        Returns:
+            cur_a (numpy array) : probabilities of output layer
+        """
 
-    def update_epoch_plot(self, fig, ax, epoch, num_epochs):
+        # set the data as "a0"
+        a_behind = X
+
+        # go through the layers and save the activations
+        for layer in range(self.num_layers-1):
+            web_idx = layer + 1
+
+            activation_func = self.layers[web_idx]["activation"]
+            W = self.params[f"W{web_idx}"]
+            b = self.params[f"b{web_idx}"]
+
+            cur_z = a_behind @ W + b
+            cur_a = activation_func.forward(cur_z)
+
+            a_behind = cur_a
+
+        return cur_a
+    
+    def avg_loss(self, X, y):
+        """Calculate the average loss depending on the loss function
+        
+        Args:
+            X (numpy array) : examples to predict on (num_examples x num_features)
+            y (numpy array) : true labels (num_examples x 1)
+        
+        """
+        # calculate activation values for each layer (includes predicted values)
+        y_pred = self.predict_prob(X)
+
+        # return avg of the losses
+        return np.mean(self.loss.forward(y_pred, y))
+
+    def _update_epoch_plot(self, fig, ax, epoch, num_epochs):
         """Updates training plot to display average losses
 
         Args:
@@ -363,18 +331,18 @@ class NN:
         ax.set(xlim=[0,num_epochs], ylim=[0,max_val])
         plt.pause(.1)
 
-    def predict_labels(self, X_examples):
+    def predict_labels(self, X):
         """Predict labels of given X examples
         
         Args:
-            X_examples (numpy array) : array of examples by row
+            X (numpy array) : array of examples by row
 
         Returns:
             predictions (numpy array) : array of prediction for each example by row
         
         """
         # calculate activation values for each layer (includes predicted values)
-        final_activations = self.predict_prob(X_examples)
+        final_activations = self.predict_prob(X)
 
         if self.loss == node_funcs.BCE:
             predictions = final_activations > .5
@@ -383,7 +351,7 @@ class NN:
 
         return predictions
     
-    def evaluate(self, X_test, y_test):
+    def accuracy(self, X_test, y_test):
         """Calculate accuracy of inference for given examples and their ground truths
         
         Args:
@@ -403,8 +371,88 @@ class NN:
 
         return accuracy
     
+class ChunkyNN(SmoothNN):
+    """NN class for chunk iterator for large datasets
+    see no_resources.Chunk"""
+    def fit(self, 
+            chunk_manager, 
+            learning_rate=1, 
+            reg_strength=0.0001,
+            num_epochs=30,
+            verbose=True, 
+            display=True):
+        """Feeds data from chunk generator into model for training
+        
+        Args:
+            chunk_generator ()
+        """
+        # set attributes
+        self.chunk_manager = chunk_manager
+        self.learning_rate = learning_rate
+        self.reg_strength = reg_strength
 
+        # validate inputs
+        super()._val_structure
 
+        # get initial params
+        super()._get_initial_params() 
 
+        # initialize lists for costs
+        self.batch_train_costs = []
+        self.epoch_dev_costs = []
 
+        for epoch in range(num_epochs):
+            for data in self.chunk_manager.generate():
+                X_train, y_train, X_dev, y_dev, _, _ = data
+                super()._batch_total_pass(X_train, y_train)
+                
+                # get training and dev loss
+                batch_train_cost = super().avg_loss(X_train, y_train)
 
+                self.batch_train_costs.append(batch_train_cost)
+
+                if verbose:
+                    print(f"Batch training cost: {batch_train_cost}")
+
+        # avg cost train and cost dev for the before you update display for the epoch or put somewhere else then average, cost_train_batch, 
+            # should you make a whole new type of graph? after a few passes 
+
+    def accuracy(self):
+        """Evaluate accuracy efficiently"""
+
+        train_right_sum = 0
+        train_len_sum = 0
+
+        dev_right_sum = 0
+        dev_len_sum = 0
+
+        test_right_sum = 0
+        test_len_sum = 0
+
+        for data in self.chunk_manager.generate():
+            X_train, y_train, X_dev, y_dev, X_test, y_test = data
+
+            # calculate activation values for each layer (includes predicted values)
+            y_pred_train = self.predict_labels(X_train)
+            y_pred_dev = self.predict_labels(X_dev)
+            y_pred_test = self.predict_labels(X_test)
+
+            if self.loss != node_funcs.BCE:
+                y_train = np.argmax(y_train,axis=1)
+                y_dev = np.argmax(y_dev,axis=1)
+                y_test = np.argmax(y_test,axis=1)
+            
+            train_right_sum += (y_pred_train == y_train).sum()
+            dev_right_sum += (y_pred_dev == y_dev).sum()
+            test_right_sum += (y_pred_test == y_test).sum()
+
+            train_len_sum += X_train.shape[0]
+            dev_len_sum += X_dev.shape[0]
+            test_len_sum += X_test.shape[0]
+        
+        # calculate the accuracies
+        train_accuracy = train_right_sum / train_len_sum
+        dev_accuracy = dev_len_sum / dev_len_sum
+        test_accuracy = test_len_sum / test_len_sum
+
+        return train_accuracy, dev_accuracy, test_accuracy

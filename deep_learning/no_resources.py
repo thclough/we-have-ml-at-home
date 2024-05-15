@@ -9,74 +9,150 @@ class Chunk:
         data_csv_path (str) : csv file path
         chunk_size (int) : size of the chunks
         seed (int) : seed for train,dev,test split in chunks
+        tdt_split (3_tuple) : split of the data into (train_share, dev_share, test_share) as proportion of 1 ex. (.95,.04,.01)
 
     Methods:
         see method docstrings
     
     """
 
-    def __init__(self, data_csv_path, chunk_size, seed=100):
+    def __init__(self, 
+                 chunk_size,
+                 tdt_sizes=(.95,.04,.01),
+                 seed=100):
         """
         Args:
-            data_csv_path (str) : csv file path
             chunk_size (int) : size of the chunks
+            tdt_sizes (3_tuple, default=(.95,.04,.01)) : split of the data into (train_share, dev_share, test_share) as proportion of 1 ex. (.95,.04,.01)
             seed (int) : seed for train,dev,test split in chunks
         """
-        self.data_csv_path = data_csv_path
         self.chunk_size = chunk_size
+        self.tdt_sizes = tdt_sizes
         self.seed = seed
+        # whether or not input or output data specified yet
+        self._input_flag = False
+        self._output_flag = False
 
-    def generate(self, 
-                 make_sparse=False,
-                 sparse_dim=None,
-                 tdt_sizes=(.95,.04,.01)):
-        """Generator to produce chunks from large data set split into train, dev, test
+    def set_data_input_props(self, input_csv_path, data_selector=np.s_[:], sparse_dim=None):
+        """Set the data/input properties for the chunk object
         
         Args:
-            make_sparse (bool, default=True) : whether or not to convert 
-            tdt_sizes (3_tuple, default=(.95,.04,.01)) : split of the data into (train_share, dev_share, test_share) as proportion of 1 ex. (.95,.04,.01)
-
-        Yields:
-            X_data (numpy array) : 
-            y_data (numpy array) :
+            input_csv_path (str) : csv file path of data
+            data_selector (IndexExpression, default=None) : 1D index expression to select certain columns, if none specified will select all columns
+            sparse_dim (int, default=None) : dimensions of the sparse vectors, if applicable
         """
-        # validation
-        val_list = np.array(tdt_sizes)
+        self.input_csv_path = input_csv_path
 
-        if val_list.sum() != 1:
-            raise Exception("tdt split must sum to 1")
+        # select all columns if no data columns
+        self._data_input_selector = data_selector
+
+        self._sparse_dim = sparse_dim
+
+        self._input_flag=True
+
+    def set_data_output_props(self, output_csv_path, data_selector=np.s_[:], one_hot_width=None):
+        """Set the label properties for the chunk object
         
-        if np.any(val_list < 0) or np.any(val_list > 1):
-            raise Exception("tdt splits must be between 0 and 1 inclusive")
+        Args:
+            input_csv_path (str) : csv file path of data
+            data_selector (IndexExpression, default=None) : 1D index expression to select certain columns, if none specified will select all columns
+            one_hot_width (list, default=None) : number of categories for one hot encoding
+        """
+
+        self.val_set_data_output_props(output_csv_path, data_selector, one_hot_width)
+
+        self.output_csv_path = output_csv_path
+
+        self._data_output_selector = data_selector
+
+        # handle one hot encoding
+        self._one_hot_width = one_hot_width
+
+        self._output_flag = True
+
+    @staticmethod
+    def val_set_data_output_props(output_csv_path, data_selector, one_hot_width):
+        """Validate output properties input for set_data_output_props
+        
+        Args:
+            see set_data_output_props
+        """
+        if type(data_selector) is not int and one_hot_width:
+            raise Exception("Cannot one hot encode multiple columns")
+
+    def generate(self):
+        """Generator to produce chunks from large data set split into train, dev, test
+        
+        Yields:
+            X_train (numpy array) : 
+            y_train (numpy array) :
+            X_dev (numpy array) :
+            y_dev (numpy array) :
+        """
+        # check if input and output are set
+        if not self._input_flag:
+            raise Exception("Please set data input properties (set_data_input_props)")
+
+        if not self._output_flag:
+            raise Exception("Please set data output properties (set_data_output_properties)")
 
         # set the seed for consistent results
-        # setting the seed once in teh beginning for every epoch ensures same training, dev, and test data
+        # setting the seed once in the beginning for every epoch ensures same training, dev, and test data
         np.random.seed(self.seed)
 
-        with open(self.data_csv_path, "r") as csv_file:
-            csv_reader = csv.reader(csv_file)
-            next(csv_reader)
-            end_flag = False
+        with open(self.input_csv_path, "r") as input_file, open(self.output_csv_path, "r") as output_file:
+            input_reader = csv.reader(input_file)
+            output_reader = csv.reader(output_file)
 
-            while not end_flag:
+            next(input_reader)
+            next(output_reader)
+
+            input_end_flag = False
+            output_end_flag = False
+
+            while not (input_end_flag and output_end_flag):
                 # to gather examples in current chunk
-                chunk, end_flag = self.get_current_chunk(csv_reader, end_flag)
-                shuffled_idxs = np.random.permutation(len(chunk))
+                X_data, input_end_flag = self.get_current_chunk(input_reader, self._data_input_selector, input_end_flag)
+                y_data, output_end_flag = self.get_current_chunk(output_reader, self._data_output_selector, output_end_flag)
+
+                # datasets not the same size
+                if len(X_data) != len(y_data):
+                    raise Exception("Input file and output file are not the same length")
+
+                shuffled_idxs = np.random.permutation(len(X_data))
                 
-                X_data, y_data = self.data_label_split(chunk)
-                if make_sparse:
-                    X_data = OneHotArray(shape=(len(X_data),sparse_dim),idx_array=X_data)
-                X_train, y_train, X_dev, y_dev, X_test, y_test = self.tdt_split(X_data, y_data, shuffled_idxs, tdt_sizes)
+                #X_data, y_data = self.data_label_split(chunk)
+
+                if self._sparse_dim:
+                    X_data = OneHotArray(shape=(len(X_data),self._sparse_dim),idx_array=X_data)
+
+                if self._one_hot_width:
+                    y_data = self.one_hot_labels(y_data)
+
+                X_train, y_train, X_dev, y_dev, X_test, y_test = self.tdt_split(X_data, y_data, shuffled_idxs)
 
                 yield X_train, y_train, X_dev, y_dev, X_test, y_test
 
-    def get_current_chunk(self, csv_reader, end_flag):
+    def one_hot_labels(self, y_data):
+        """One hot labels from 
+        
+        Args:
+            y_data (numpy array) : 
+        
+        """
+        one_hot_labels = np.zeros((y_data.size, self._one_hot_width))
+        one_hot_labels[np.arange(y_data.size), y_data.astype(int)] = 1
+
+        return one_hot_labels
+    
+    def get_current_chunk(self, csv_reader, data_selector, end_flag):
         """Gets current chunk (section of examples) based on current state of csv_reader
         
         Args:
             csv_reader (reader object) : reader object for the data csv
+            data_selector (numpy index expression) : index expression to select data from
             end_flag (bool) : whether or not the end of the csv file has been reached
-        
+
         Returns:
             chunk (numpy array) : current chunk of examples in numpy array form
             end_flag (bool) : whether or not the end of the csv file has been reached
@@ -87,41 +163,40 @@ class Chunk:
         while i < self.chunk_size and not end_flag:
             try:
                 line = next(csv_reader)
-                chunk.append(line)
+                np_line = np.array(line)
+                chunk.append(np_line[data_selector]) #select for each line feed for efficiency
             except: # reached the end of the csv file
                 end_flag = True
             i+=1
 
-        chunk = np.array(chunk)
+        chunk = np.array(chunk).astype(float)
 
         return chunk, end_flag
     
-    def data_label_split(self, chunk):
-        """split chunk into data and labels
+    # def data_label_split(self, chunk):
+    #     """split chunk into data and labels
         
-        Args:
-            chunk (numpy array) : complete data with labels as last column
+    #     Args:
+    #         chunk (numpy array) : complete data with labels as last column
 
-        Returns:
-            X_data (numpy array) : inputs, each row is an entry
-            y_data (numpy array) : labels/outputs
-        """
+    #     Returns:
+    #         X_data (numpy array) : inputs, each row is an entry
+    #         y_data (numpy array) : labels/outputs
+    #     """
 
-        X_data = chunk[:,:-1]
-        y_data = chunk[:,-1].reshape(-1,1)
+    #     X_data = chunk[:,:-1]
+    #     y_data = chunk[:,-1].reshape(-1,1)
 
-        return X_data, y_data
+    #     return X_data, y_data
 
-    
-    def tdt_split(self, X_data, y_data, shuffled_idxs, tdt_sizes):
+    def tdt_split(self, X_data, y_data, shuffled_idxs):
         """ Splits the data into train dev and test sets based on tdt_split, splits into entries and labels
         
         Args:
             X_data (numpy array) :
             y_data (numpy array)
             shuffled_idxs (numpy array) : permutation of non-negative integers up to but not including the chunk size
-            tdt_split (3_tuple) : split of the data into (train_share, dev_share, test_share) as proportion of 1 ex. (.95,.04,.01)
-
+        
         Returns:
             X_train (numpy array) : training entries (num_training_examples x num_features) 
             y_train (numpy array) : training labels (num_training_examples x num _features)
@@ -130,13 +205,14 @@ class Chunk:
             X_test (numpy array) : test "..."
             y_test (numpy array) : test "..."
         """
-        
-        # divide the data into train, dev, test
-        train_share = tdt_sizes[0]
-        dev_share = tdt_sizes[1]
+        m, _ = X_data.shape
 
-        train_upper = round(train_share * len(X_data))
-        dev_upper = train_upper + round(dev_share * len(X_data))
+        # divide the data into train, dev, test
+        train_share = self.tdt_sizes[0]
+        dev_share = self.tdt_sizes[1]
+
+        train_upper = round(train_share * m)
+        dev_upper = train_upper + round(dev_share * m)
 
         train_idxs = shuffled_idxs[:train_upper]
         dev_idxs = shuffled_idxs[train_upper:dev_upper]
@@ -153,8 +229,29 @@ class Chunk:
 
         return X_train, y_train, X_dev, y_dev, X_test, y_test
 
+    @property
+    def tdt_sizes(self):
+        return self._tdt_sizes
 
+    @tdt_sizes.setter
+    def tdt_sizes(self, tdt_sizes):
 
+        # validation
+        val_list = np.array(tdt_sizes)
+
+        train_share = tdt_sizes[0]
+
+        if np.any(val_list < 0) or np.any(val_list > 1):
+            raise AttributeError("tdt splits must be between 0 and 1 inclusive")
+
+        if train_share == 0:
+            raise AttributeError("Training share must be greater than 0")
+
+        if val_list.sum() != 1:
+            raise AttributeError("tdt split must sum to 1")
+    
+        self._tdt_sizes = tdt_sizes
+        
 class OneHotArray:
     """Sparse array for maximizing storage efficiency
 
@@ -166,31 +263,56 @@ class OneHotArray:
         Args:
             shape (tuple) : dimensions of the array
             idx_array (array, default=None) : array where each row corresponds to a row vector in the OneHotArray
-                integers in the array correspond to column indices of the 1 entries
+                integers in the array correspond to column indices of the 1 entries, 
+                only positive integers allowed, except for -1 which counts as null space
             oha_dict (dict) : {row:col_idxs} dict
 
         """
         self.shape = shape
         self.ndim = 2
-        
-        if idx_array and not oha_dict:
+
+        # instantiate cand_idx_rel dict to hold sparse array
+        cand_idx_rel = {}
+
+        if isinstance(idx_array, (np.ndarray, list)) != None and oha_dict == None:
             if self.shape[0] < len(idx_array):
                 raise Exception("Number of row vectors in array must be greater than amount given")
-            self.idx_rel = {row_idx:col_idxs for row_idx, col_idxs in enumerate(idx_array)}
-        elif oha_dict and not idx_array:
-            if self.shape[0] < max(oha_dict.keys()) + 1:
-                raise Exception("Number of row vectors in array must be greater than max row index plus one")
-            self.idx_rel = oha_dict
+            for row_idx, col_idxs in enumerate(idx_array):
+                filtered_col_idxs = self.filter_col_idxs(col_idxs)
+                cand_idx_rel[row_idx] = filtered_col_idxs
+
+        elif oha_dict != None and idx_array == None:
+            
+            if oha_dict.keys():
+                if self.shape[0] < max(oha_dict.keys()) + 1:
+                    raise Exception("Number of row vectors in array must be greater than max row index plus one")
+            for row_idx, col_idxs in oha_dict.items():
+                self.validate_idx(row_idx, axis=0)
+                filtered_col_idxs = self.filter_col_idxs(col_idxs)
+                cand_idx_rel[row_idx] = filtered_col_idxs
         else:
             raise Exception("Must either instantiate OneHotArray with an idx_array or oha_dict")
 
-        self.validate_col_idxs()
+        self.idx_rel = cand_idx_rel
+    
+    def filter_col_idxs(self, raw_col_idxs):
+        """Add valid column idxs to list and return valid idxs (in range of reference matrix when 0-indexed)
+        Args:
+            raw_col_idxs (array-like): list of possible column idxs
         
-    def validate_col_idxs(self):
-        for col_idxs in self.idx_rel.values():
-            for col_idx in col_idxs:
+        Returns: 
+            filtered_col_idxs (list): valid col idxs for a given row
+        """
+        filtered_col_idxs = []
+        for col_idx in raw_col_idxs:
+            if col_idx >= 0:
                 self.validate_idx(col_idx, axis=1)
-        
+                filtered_col_idxs.append(int(col_idx))
+            if col_idx < -1:
+                raise Exception("No negative indices allowed (besides -1 which represents null space)")
+
+        return filtered_col_idxs
+    
     def __matmul__(self, other):
         # validation
         if other.ndim != 2:
@@ -240,25 +362,28 @@ class OneHotArray:
 
     def __getitem__(self, key):
         """Defining getitem to duck type with numpy arrays for 0th axis slicing and indexing"""
-
         # define dimensions and n_rows placeholder
         n_rows = 0
-        n_cols = self.shape[1]
-
+        n_cols = self.shape[0]
+        
         gathered = {}
         if isinstance(key, int):
             n_rows = self.add_int_key(key, gathered, n_rows)
         elif isinstance(key, slice):
             n_rows = self.add_slice_key(key, gathered, n_rows)
-        elif isinstance(key, list): #
+        elif isinstance(key, (list, np.ndarray)):
             for sub_key in key:
-                if isinstance(sub_key, int):
+                if isinstance(sub_key, tuple([int] + np.sctypes["int"])):
                     n_rows = self.add_int_key(sub_key, gathered, n_rows)
                 else:
                     raise SyntaxError
         else:
             raise SyntaxError
         
+        # for empty 
+        if n_rows == 0:
+            n_cols = 0
+
         return OneHotArray(shape=(n_rows,n_cols), oha_dict=gathered)
         
     def add_int_key(self, int_idx, gathered, n_rows):
@@ -274,6 +399,8 @@ class OneHotArray:
         self.validate_idx(int_idx)
         if int_idx < 0:
             int_idx = self.convert_neg_idx(int_idx)
+        # only need to gather rows in oha, 
+        # if not in oha array (all zeroes) then should not be part of oha
         if int_idx in self.idx_rel:
             gathered[n_rows] = self.idx_rel[int_idx]
         
@@ -294,7 +421,6 @@ class OneHotArray:
         Args:
             idx (int) :  index to validate
             axis (int, default=0)
-
         """
         indexed_rows = self.shape[axis]
         if idx < -indexed_rows or idx > indexed_rows-1:

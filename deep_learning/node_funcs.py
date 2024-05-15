@@ -165,10 +165,9 @@ class CE:
     def forward(y_pred, y_true):
         """y_true is a sparse array"""
 
+        # can use log1p because monotonically increases
         return -np.sum(y_true * np.log1p(y_pred), axis=1)
     
     @staticmethod
     def backward(y_pred, y_true):
         return y_pred - y_true 
-    
-    
