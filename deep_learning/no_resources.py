@@ -5,6 +5,8 @@ import re
 
 #TODO
 ## could change the opener attrs to kwargs
+## optimizing chunk size based on operations (but would have to peek at operations)
+## one hot encoding to OHA
 
 class Chunk:
     """Chunk object to deal with parsing large datasets, 
@@ -82,8 +84,6 @@ class Chunk:
             one_hot_width (list, default=None) : number of categories for one hot encoding
         """
 
-        self.val_set_data_output_props(output_csv_path, data_selector, one_hot_width)
-
         self.output_csv_path = output_csv_path
 
         # get the opener function
@@ -92,20 +92,35 @@ class Chunk:
         self._data_output_selector = data_selector
 
         # handle one hot encoding
-        self._one_hot_width = one_hot_width
+        self.one_hot_width = one_hot_width
 
         self._output_flag = True
 
-    @staticmethod
-    def val_set_data_output_props(output_csv_path, data_selector, one_hot_width):
-        """Validate output properties input for set_data_output_props
+    @property
+    def one_hot_width(self):
+        return self._one_hot_width
+    
+    @one_hot_width.setter
+    def one_hot_width(self, one_hot_width_cand):
+        """Validate one hot encoding for set_data_output_props and set if appropriate
         
         Args:
-            see set_data_output_props
+            one_hot_width_cand (int) : candidate for one_hot_width
         """
-        if type(data_selector) is not int and one_hot_width:
-            raise Exception("Cannot one hot encode multiple columns")
-        
+        if one_hot_width_cand is None:
+            self._one_hot_width = one_hot_width_cand
+        elif isinstance(one_hot_width_cand, int):
+            with self._output_opener(self.output_csv_path, mode=self._output_read_mode, encoding=self._output_encoding) as file:
+                reader = csv.reader(file) 
+                line = np.array(next(reader))
+                dim = len(line[self._data_output_selector])
+            if dim == 1:
+                self._one_hot_width = one_hot_width_cand
+            else:
+                raise AttributeError("Cannot set one_hot_width and one hot encode if dimensions of raw output is not 1")
+        else:
+            return AttributeError(f"one_hot_width must be an integer or None, value of {one_hot_width_cand} given")
+            
     def get_opener_attrs(self, file_path):
         """
         Args:
@@ -188,7 +203,7 @@ class Chunk:
         # setting the seed once in the beginning for every epoch ensures same training, dev, and test data
         np.random.seed(self.seed)
 
-        with open(self.input_csv_path, "r") as input_file, open(self.output_csv_path, "r") as output_file:
+        with self._input_opener(self.input_csv_path, mode=self._input_read_mode, encoding=self._input_encoding) as input_file, self._output_opener(self.output_csv_path, mode=self._output_read_mode, encoding=self._output_encoding) as output_file:
             input_reader = csv.reader(input_file)
             output_reader = csv.reader(output_file)
 
@@ -223,7 +238,10 @@ class Chunk:
         """One hot labels from 
         
         Args:
-            y_data (numpy array) : 
+            y_data (numpy array)
+
+        Returns:
+            one_hot_labels
         
         """
         one_hot_labels = np.zeros((y_data.size, self._one_hot_width))
@@ -304,12 +322,13 @@ class Chunk:
         return self._tdt_sizes
 
     @tdt_sizes.setter
-    def tdt_sizes(self, tdt_sizes):
+    def tdt_sizes(self, tdt_tuple_cand):
+        """Validate and set tdt_sizes """
 
         # validation
-        val_list = np.array(tdt_sizes)
+        val_list = np.array(tdt_tuple_cand)
 
-        train_share = tdt_sizes[0]
+        train_share = tdt_tuple_cand[0]
 
         if np.any(val_list < 0) or np.any(val_list > 1):
             raise AttributeError("tdt splits must be between 0 and 1 inclusive")
@@ -320,7 +339,7 @@ class Chunk:
         if val_list.sum() != 1:
             raise AttributeError("tdt split must sum to 1")
     
-        self._tdt_sizes = tdt_sizes
+        self._tdt_sizes = tdt_tuple_cand
         
 class OneHotArray:
     """Sparse array for maximizing storage efficiency

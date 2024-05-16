@@ -418,7 +418,13 @@ class ChunkyNN(SmoothNN):
             # should you make a whole new type of graph? after a few passes 
 
     def accuracy(self):
-        """Evaluate accuracy efficiently"""
+        """Evaluate accuracy efficiently
+        
+        Returns:
+            train_accuracy (float)
+            dev_accuracy (float)
+            test_accuracy (float)
+        """
 
         train_right_sum = 0
         train_len_sum = 0
