@@ -1,5 +1,10 @@
 import numpy as np
 import csv
+import gzip
+import re
+
+#TODO
+## could change the opener attrs to kwargs
 
 class Chunk:
     """Chunk object to deal with parsing large datasets, 
@@ -43,12 +48,30 @@ class Chunk:
         """
         self.input_csv_path = input_csv_path
 
+        # get the opener function
+        self._input_opener, self._input_read_mode, self._input_encoding = self.get_opener_attrs(self.input_csv_path)
+
         # select all columns if no data columns
         self._data_input_selector = data_selector
 
         self._sparse_dim = sparse_dim
 
+        self.set_input_dim()
+        
         self._input_flag=True
+
+    def set_input_dim(self):
+        """Set the dimension of the input data by peeking inside the input data file"""
+
+        if self._sparse_dim:
+            dim = self._sparse_dim
+        else:
+            with self._input_opener(self.input_csv_path, mode=self._input_read_mode, encoding=self._input_encoding) as file:
+                reader = csv.reader(file) 
+                line = np.array(next(reader))
+                dim = len(line[self._data_input_selector])
+
+        self.input_dim = dim
 
     def set_data_output_props(self, output_csv_path, data_selector=np.s_[:], one_hot_width=None):
         """Set the label properties for the chunk object
@@ -62,6 +85,9 @@ class Chunk:
         self.val_set_data_output_props(output_csv_path, data_selector, one_hot_width)
 
         self.output_csv_path = output_csv_path
+
+        # get the opener function
+        self._output_opener, self._output_read_mode, self._output_encoding = self.get_opener_attrs(self.output_csv_path)
 
         self._data_output_selector = data_selector
 
@@ -79,6 +105,68 @@ class Chunk:
         """
         if type(data_selector) is not int and one_hot_width:
             raise Exception("Cannot one hot encode multiple columns")
+        
+    def get_opener_attrs(self, file_path):
+        """
+        Args:
+            file_path (str) : file path string
+
+        Returns:
+            opener (function) : function to open file
+            read_mode (str) : read mode to use for opener
+            encoding (str) : encoding type
+        """
+        extension = self.get_file_extension(file_path)
+        opener, read_mode, encoding = self.extension_to_opener(extension)
+
+        return opener, read_mode, encoding
+
+    @staticmethod
+    def extension_to_opener(file_extension):
+        """Return the correct open function for the file extension
+        
+        Args:
+            file_extension (str) : file extension string
+        
+        Returns:
+            opener (function) : function to open file
+            read_mode (str) : read mode to use for opener
+            encoding (str) : encoding type
+        """
+        if file_extension == "csv":
+            opener = open
+            read_mode = "r"
+            encoding = None
+        elif file_extension == "csv.gz":
+            opener = gzip.open
+            read_mode = "rt"
+            encoding = "utf-8"
+        else:
+            raise Exception("File extension not supported")
+        
+        return opener, read_mode, encoding
+
+    @staticmethod
+    def get_file_extension(file_path):
+        """Get the file extension of a file path
+        
+        Args:
+            file_path (str) : file path string
+
+        Returns:
+            (str) The file extension 
+        """
+        # Define the regex pattern to match the file extension
+        pattern = r'\.(.+)$'
+        
+        # Use re.search to find the pattern in the file path
+        match = re.search(pattern, file_path)
+        
+        # If a match is found, return the matched file extension
+        if match:
+            return match.group(1)
+        else:
+            return None  # Return None if no extension is found
 
     def generate(self):
         """Generator to produce chunks from large data set split into train, dev, test
