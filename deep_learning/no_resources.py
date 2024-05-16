@@ -120,8 +120,6 @@ class Chunk:
                     raise Exception("Input file and output file are not the same length")
 
                 shuffled_idxs = np.random.permutation(len(X_data))
-                
-                #X_data, y_data = self.data_label_split(chunk)
 
                 if self._sparse_dim:
                     X_data = OneHotArray(shape=(len(X_data),self._sparse_dim),idx_array=X_data)
@@ -173,22 +171,6 @@ class Chunk:
 
         return chunk, end_flag
     
-    # def data_label_split(self, chunk):
-    #     """split chunk into data and labels
-        
-    #     Args:
-    #         chunk (numpy array) : complete data with labels as last column
-
-    #     Returns:
-    #         X_data (numpy array) : inputs, each row is an entry
-    #         y_data (numpy array) : labels/outputs
-    #     """
-
-    #     X_data = chunk[:,:-1]
-    #     y_data = chunk[:,-1].reshape(-1,1)
-
-    #     return X_data, y_data
-
     def tdt_split(self, X_data, y_data, shuffled_idxs):
         """ Splits the data into train dev and test sets based on tdt_split, splits into entries and labels
         
@@ -286,6 +268,7 @@ class OneHotArray:
             if oha_dict.keys():
                 if self.shape[0] < max(oha_dict.keys()) + 1:
                     raise Exception("Number of row vectors in array must be greater than max row index plus one")
+                
             for row_idx, col_idxs in oha_dict.items():
                 self.validate_idx(row_idx, axis=0)
                 filtered_col_idxs = self.filter_col_idxs(col_idxs)
@@ -297,6 +280,7 @@ class OneHotArray:
     
     def filter_col_idxs(self, raw_col_idxs):
         """Add valid column idxs to list and return valid idxs (in range of reference matrix when 0-indexed)
+
         Args:
             raw_col_idxs (array-like): list of possible column idxs
         
@@ -364,7 +348,7 @@ class OneHotArray:
         """Defining getitem to duck type with numpy arrays for 0th axis slicing and indexing"""
         # define dimensions and n_rows placeholder
         n_rows = 0
-        n_cols = self.shape[0]
+        n_cols = self.shape[1]
         
         gathered = {}
         if isinstance(key, int):
@@ -464,5 +448,25 @@ class OneHotArray:
 
         return new
     
+    def __eq__(self, other):
+        if isinstance(other, OneHotArray):
+            return self.shape == other.shape and self.idx_rel == other.idx_rel
+        elif isinstance(other, np.ndarray):
+            if self.shape != other.shape:
+                return False
+            for i in range(other.shape[0]):
+                for j in range(other.shape[1]):
+                    val = other[i][j]
+                    if val != 0 and val != 1:
+                        return False
+                    elif val == 1:
+                        if j not in self.idx_rel[i]:
+                            return False
+                    elif val == 0:
+                        if j in self.idx_rel[i]:
+                            return False
+                        
+            return True
+
     def __str__(self):
         return str(self.idx_rel)
