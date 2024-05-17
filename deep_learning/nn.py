@@ -3,8 +3,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 #from we_have_ml_at_home.deep_learning import node_funcs
 import node_funcs
+import time
 
 # TODO
+## ChunkNN taking .57 per batch while regular only .02 -> don't 
 ## forward pass/za vals optimization(only store last layers), predictions and average loss
 ## Chunk fit
 ## different types of regularization
@@ -169,6 +171,7 @@ class SmoothNN:
         """
         n = len(X_train)
 
+        start_train_time = time.time()
         # go through the batches
         for start_idx in range(0,n-1,self.batch_size):
             end_idx = min(start_idx + self.batch_size, n)
@@ -179,6 +182,11 @@ class SmoothNN:
 
             # create batch_total_pass, just return this
             self._batch_total_pass(X_train_batch, y_train_batch)
+
+            cur_train_time = time.time()
+            #print(cur_train_time-start_train_time)
+
+            start_train_time = cur_train_time
 
     def _batch_total_pass(self, X_train_batch, y_train_batch):
         """forward propagation, backward propagation and parameter updates for """
@@ -402,11 +410,17 @@ class ChunkyNN(SmoothNN):
         self.epoch_dev_costs = []
 
         for epoch in range(num_epochs):
+            start_train_time = time.time()
             for data in self.chunk_manager.generate():
                 X_train, y_train, X_dev, y_dev, _, _ = data
+
                 super()._batch_total_pass(X_train, y_train)
+
+                cur_train_time = time.time()
                 
-                # get training and dev loss
+                start_train_time = cur_train_time
+                
+                #get training and dev loss
                 batch_train_cost = super().avg_loss(X_train, y_train)
 
                 self.batch_train_costs.append(batch_train_cost)

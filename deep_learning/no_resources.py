@@ -2,11 +2,20 @@ import numpy as np
 import csv
 import gzip
 import re
+import time
+import warnings
 
 #TODO
-## could change the opener attrs to kwargs
+# speed up generate to use np.loadtxt
+# how to standardize data
+
+## could change the opener attrs to kwargs, or make an opener object (# jar opener)
+## could extract tdt_split, make separate files for tdt_split to avoid leakage, makes object simpler
+
+## one hot encoding fro y_data just to OHA
 ## optimizing chunk size based on operations (but would have to peek at operations)
-## one hot encoding to OHA
+
+## "like" arg, np.loadtxt __array_function__ protocol for oha?
 
 class Chunk:
     """Chunk object to deal with parsing large datasets, 
@@ -40,12 +49,13 @@ class Chunk:
         self._input_flag = False
         self._output_flag = False
 
-    def set_data_input_props(self, input_csv_path, data_selector=np.s_[:], sparse_dim=None):
+    def set_data_input_props(self, input_csv_path, data_selector=np.s_[:], skip_rows=0, sparse_dim=None):
         """Set the data/input properties for the chunk object
         
         Args:
             input_csv_path (str) : csv file path of data
             data_selector (IndexExpression, default=None) : 1D index expression to select certain columns, if none specified will select all columns
+            skip_rows (int, default=0) : number of rows to skip
             sparse_dim (int, default=None) : dimensions of the sparse vectors, if applicable
         """
         self.input_csv_path = input_csv_path
@@ -58,6 +68,8 @@ class Chunk:
 
         self._sparse_dim = sparse_dim
 
+        self._input_skip_rows = skip_rows
+
         self.set_input_dim()
         
         self._input_flag=True
@@ -68,19 +80,17 @@ class Chunk:
         if self._sparse_dim:
             dim = self._sparse_dim
         else:
-            with self._input_opener(self.input_csv_path, mode=self._input_read_mode, encoding=self._input_encoding) as file:
-                reader = csv.reader(file) 
-                line = np.array(next(reader))
-                dim = len(line[self._data_input_selector])
+            dim = self.get_selector_dim(self._input_opener, self.input_csv_path, self._input_read_mode, self._input_encoding, self._data_input_selector)
 
         self.input_dim = dim
 
-    def set_data_output_props(self, output_csv_path, data_selector=np.s_[:], one_hot_width=None):
+    def set_data_output_props(self, output_csv_path, data_selector=np.s_[:], skip_rows=0, one_hot_width=None):
         """Set the label properties for the chunk object
         
         Args:
             input_csv_path (str) : csv file path of data
             data_selector (IndexExpression, default=None) : 1D index expression to select certain columns, if none specified will select all columns
+            skip_rows (int, default=0) : number of rows to skip
             one_hot_width (list, default=None) : number of categories for one hot encoding
         """
 
@@ -93,6 +103,10 @@ class Chunk:
 
         # handle one hot encoding
         self.one_hot_width = one_hot_width
+
+        self._output_skip_rows = skip_rows
+
+        self.set_output_dim()
 
         self._output_flag = True
 
@@ -110,17 +124,34 @@ class Chunk:
         if one_hot_width_cand is None:
             self._one_hot_width = one_hot_width_cand
         elif isinstance(one_hot_width_cand, int):
-            with self._output_opener(self.output_csv_path, mode=self._output_read_mode, encoding=self._output_encoding) as file:
-                reader = csv.reader(file) 
-                line = np.array(next(reader))
-                dim = len(line[self._data_output_selector])
+            dim = self.get_selector_dim(self._output_opener, self.output_csv_path, self._output_read_mode, self._output_encoding, self._data_output_selector)
+
             if dim == 1:
                 self._one_hot_width = one_hot_width_cand
             else:
                 raise AttributeError("Cannot set one_hot_width and one hot encode if dimensions of raw output is not 1")
         else:
             return AttributeError(f"one_hot_width must be an integer or None, value of {one_hot_width_cand} given")
-            
+
+    def set_output_dim(self):
+        """Set the output dimension (After one hot encoding)"""
+        if self.one_hot_width:
+            dim = self.one_hot_width
+        else:
+            dim = self.get_selector_dim(self._output_opener, self.output_csv_path, self._output_read_mode, self._output_encoding, self._data_output_selector)
+
+        self.output_dim = dim
+
+    @staticmethod
+    def get_selector_dim(opener, path, read_mode, encoding, data_selector):
+        """Return the dimension of selected data within file"""
+        with opener(path, mode=read_mode, encoding=encoding) as file:
+            reader = csv.reader(file) 
+            line = np.array(next(reader))
+            selector_dim = len(line[data_selector])
+
+        return selector_dim
+
     def get_opener_attrs(self, file_path):
         """
         Args:
@@ -201,23 +232,34 @@ class Chunk:
 
         # set the seed for consistent results
         # setting the seed once in the beginning for every epoch ensures same training, dev, and test data
+        # use numpy load text skiprows and max_rows=chunk_size
+
         np.random.seed(self.seed)
 
+        # open data and label files as file objects to decrease open and close overhead
         with self._input_opener(self.input_csv_path, mode=self._input_read_mode, encoding=self._input_encoding) as input_file, self._output_opener(self.output_csv_path, mode=self._output_read_mode, encoding=self._output_encoding) as output_file:
-            input_reader = csv.reader(input_file)
-            output_reader = csv.reader(output_file)
+            
+            for _ in range(self._input_skip_rows):
+                next(input_file)
+            for _ in range(self._output_skip_rows):
+                next(output_file)
 
-            next(input_reader)
-            next(output_reader)
+            while True:
+                start_time = time.time()
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    X_data = np.loadtxt(input_file, delimiter=",", max_rows=self.chunk_size)
+                    y_data = np.loadtxt(output_file, delimiter=",", max_rows=self.chunk_size, ndmin=2)
+                end_time = time.time()
 
-            input_end_flag = False
-            output_end_flag = False
+                if len(X_data) == 0 and len(y_data) == 0:
+                    break
 
-            while not (input_end_flag and output_end_flag):
-                # to gather examples in current chunk
-                X_data, input_end_flag = self.get_current_chunk(input_reader, self._data_input_selector, input_end_flag)
-                y_data, output_end_flag = self.get_current_chunk(output_reader, self._data_output_selector, output_end_flag)
-
+                X_data = X_data[:,self._data_input_selector]
+                y_data = y_data[:,self._data_output_selector]
+                end_time = time.time()
+                #print(end_time-start_time)
+                
                 # datasets not the same size
                 if len(X_data) != len(y_data):
                     raise Exception("Input file and output file are not the same length")
@@ -234,6 +276,7 @@ class Chunk:
 
                 yield X_train, y_train, X_dev, y_dev, X_test, y_test
 
+
     def one_hot_labels(self, y_data):
         """One hot labels from 
         
@@ -245,37 +288,9 @@ class Chunk:
         
         """
         one_hot_labels = np.zeros((y_data.size, self._one_hot_width))
-        one_hot_labels[np.arange(y_data.size), y_data.astype(int)] = 1
+        one_hot_labels[np.arange(y_data.size), y_data.astype(int).flatten()] = 1
 
         return one_hot_labels
-    
-    def get_current_chunk(self, csv_reader, data_selector, end_flag):
-        """Gets current chunk (section of examples) based on current state of csv_reader
-        
-        Args:
-            csv_reader (reader object) : reader object for the data csv
-            data_selector (numpy index expression) : index expression to select data from
-            end_flag (bool) : whether or not the end of the csv file has been reached
-
-        Returns:
-            chunk (numpy array) : current chunk of examples in numpy array form
-            end_flag (bool) : whether or not the end of the csv file has been reached
-        
-        """
-        i = 0 
-        chunk = []
-        while i < self.chunk_size and not end_flag:
-            try:
-                line = next(csv_reader)
-                np_line = np.array(line)
-                chunk.append(np_line[data_selector]) #select for each line feed for efficiency
-            except: # reached the end of the csv file
-                end_flag = True
-            i+=1
-
-        chunk = np.array(chunk).astype(float)
-
-        return chunk, end_flag
     
     def tdt_split(self, X_data, y_data, shuffled_idxs):
         """ Splits the data into train dev and test sets based on tdt_split, splits into entries and labels
