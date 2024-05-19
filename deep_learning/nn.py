@@ -6,7 +6,6 @@ import node_funcs
 import time
 
 # TODO
-## ChunkNN taking .57 per batch while regular only .02 -> don't 
 ## forward pass/za vals optimization(only store last layers), predictions and average loss
 ## Chunk fit
 ## different types of regularization
@@ -379,9 +378,13 @@ class SmoothNN:
 
         return accuracy
     
-class ChunkyNN(SmoothNN):
+
+class ChunkyNN:
+    pass
+
+class ChunkBlockNN(SmoothNN):
     """NN class for chunk iterator for large datasets
-    see no_resources.Chunk"""
+    see no_resources.ChunkBlock"""
     def fit(self, 
             chunk_manager, 
             learning_rate=1, 
@@ -410,6 +413,7 @@ class ChunkyNN(SmoothNN):
         self.epoch_dev_costs = []
 
         for epoch in range(num_epochs):
+            print(f"epoch: {epoch}")
             start_train_time = time.time()
             for data in self.chunk_manager.generate():
                 X_train, y_train, X_dev, y_dev, _, _ = data
@@ -422,11 +426,11 @@ class ChunkyNN(SmoothNN):
                 
                 #get training and dev loss
                 batch_train_cost = super().avg_loss(X_train, y_train)
-
+                
                 self.batch_train_costs.append(batch_train_cost)
 
-                if verbose:
-                    print(f"Batch training cost: {batch_train_cost}")
+            if verbose:
+                print(f"Batch training cost: {self.batch_train_costs[-1]}")
 
         # avg cost train and cost dev for the before you update display for the epoch or put somewhere else then average, cost_train_batch, 
             # should you make a whole new type of graph? after a few passes 
@@ -472,7 +476,7 @@ class ChunkyNN(SmoothNN):
         
         # calculate the accuracies
         train_accuracy = train_right_sum / train_len_sum
-        dev_accuracy = dev_len_sum / dev_len_sum
-        test_accuracy = test_len_sum / test_len_sum
+        dev_accuracy = dev_right_sum / dev_len_sum
+        test_accuracy = test_right_sum / test_len_sum
 
         return train_accuracy, dev_accuracy, test_accuracy

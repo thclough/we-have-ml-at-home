@@ -4,9 +4,9 @@ import gzip
 import re
 import time
 import warnings
+import traceback
 
 #TODO
-# speed up generate to use np.loadtxt
 # how to standardize data
 
 ## could change the opener attrs to kwargs, or make an opener object (# jar opener)
@@ -17,9 +17,89 @@ import warnings
 
 ## "like" arg, np.loadtxt __array_function__ protocol for oha?
 
+def chop_up_data(source_path, tdt_split):
+    """Section given data source into train, test, and dev data sets"""
+    
+    pass
+
+class JarOpener:
+    """A file opener to read a file at a given path
+    
+    Attributes:
+        _opener (function)) : opener function for file
+        _open_kwargs (dict)) : kwargs for the opener
+    """
+
+    def __init__(self, source_path) -> None:
+        self._opener, self._opener_kwargs = self.get_opener_attrs(source_path)
+    
+    @staticmethod
+    def get_file_extension(source_path):
+        """Get the file extension of a file path
+        
+        Args:
+            source_path (str) : file path string
+
+        Returns:
+            (str) The file extension 
+        """
+        # Define the regex pattern to match the file extension
+        pattern = r'\.(.+)$'
+        
+        # Use re.search to find the pattern in the file path
+        match = re.search(pattern, source_path)
+        
+        # If a match is found, return the matched file extension
+        if match:
+            return match.group(1)
+        else:
+            return None  # Return None if no extension is found
+
+    def get_opener_attrs(self, source_path):
+        """Return the correct open function for the file extension
+        
+        Args:
+            source_path (str) : file path string
+        
+        Returns:
+            opener (function) : function to open file
+            opener_kwargs (dict) : args for the opener function
+        """
+        file_extension = self.get_file_extension(source_path)
+
+        if file_extension == "csv":
+            opener = open
+            opener_kwargs = {"file": source_path, "mode": "r", "encoding": None}
+        elif file_extension == "csv.gz":
+            opener = gzip.open
+            opener_kwargs =  {"filename": source_path, "mode": "rt", "encoding":"utf-8"}
+        else:
+            raise Exception("File extension not supported")
+        
+        return opener, opener_kwargs
+
+    def __enter__(self):
+        # return the open file
+        self.open_source = self._opener(**self._opener_kwargs)
+        return self.open_source
+
+    def __exit__(self, exc_type, exc_value, exc_traceback):
+        if self.open_source:
+            self.open_source.close()
+        if exc_type and exc_type != GeneratorExit:
+            print(f"An exception occurred: {exc_value}")
+            traceback.print_exception(exc_type, exc_value, exc_traceback)
+        return False   
+
 class Chunk:
+    pass
+
+class ChunkBlock:
     """Chunk object to deal with parsing large datasets, 
     feeds data chunk by chunk without reading whole dataset into memory.
+    ChunkBlock is different from Chunk because ChunkBlock does not need separate 
+    train, dev, and test data sources and will perform this data split on the fly 
+    (per chunk, hence the name block, because there is a multinomial draw per block)
     
     Attributes:
         data_csv_path (str) : csv file path
@@ -49,7 +129,7 @@ class Chunk:
         self._input_flag = False
         self._output_flag = False
 
-    def set_data_input_props(self, input_csv_path, data_selector=np.s_[:], skip_rows=0, sparse_dim=None):
+    def set_data_input_props(self, input_csv_path, data_selector=np.s_[:], skip_rows=0, sparse_dim=None, standardize=False):
         """Set the data/input properties for the chunk object
         
         Args:
@@ -57,11 +137,11 @@ class Chunk:
             data_selector (IndexExpression, default=None) : 1D index expression to select certain columns, if none specified will select all columns
             skip_rows (int, default=0) : number of rows to skip
             sparse_dim (int, default=None) : dimensions of the sparse vectors, if applicable
+            standardize (bool, default=False) : whether or not to standardize data
         """
-        self.input_csv_path = input_csv_path
 
         # get the opener function
-        self._input_opener, self._input_read_mode, self._input_encoding = self.get_opener_attrs(self.input_csv_path)
+        self._input_jar = JarOpener(input_csv_path)
 
         # select all columns if no data columns
         self._data_input_selector = data_selector
@@ -71,7 +151,16 @@ class Chunk:
         self._input_skip_rows = skip_rows
 
         self.set_input_dim()
+
+        self._standardize=standardize
         
+        # calculate mean and standard deviation of training data if standardizing
+        if self._standardize:
+            if self._sparse_dim is not None:
+                raise Exception("ChunkyBlock does not support standardization for sparse dims")
+            self.set_training_data_mean()
+            self.set_training_data_std()
+
         self._input_flag=True
 
     def set_input_dim(self):
@@ -80,24 +169,100 @@ class Chunk:
         if self._sparse_dim:
             dim = self._sparse_dim
         else:
-            dim = self.get_selector_dim(self._input_opener, self.input_csv_path, self._input_read_mode, self._input_encoding, self._data_input_selector)
+            dim = self.get_selector_dim(self._input_jar, self._data_input_selector)
 
         self.input_dim = dim
+
+    def set_training_data_mean(self):
+        """Retrieve the mean of the training data"""
+
+        # set the seed
+        np.random.seed(self.seed)
+
+        # open the file
+        with self._input_jar as input_file:
+            
+            # skip rows
+            for _ in range(self._input_skip_rows):
+                next(input_file)
+
+            train_sum = np.zeros(self.input_dim)
+            train_count = 0
+
+            # obtain the chunk of X_data
+            while True:
+                start_time = time.time()
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    X_data = np.loadtxt(input_file, delimiter=",", max_rows=self.chunk_size)
+
+                data_len = X_data.shape[0]
+
+                # split the data into training data
+                if data_len == 0:
+                    break
+
+                X_data = X_data[:,self._data_input_selector]
+            
+                train_idxs, _, _ = self.get_tdt_idxs(data_len)
+
+                X_train = X_data[train_idxs]
+
+                train_sum += X_train.sum(axis=0)
+                train_count += data_len
+
+        self._train_mean = train_sum / train_count
+
+    def set_training_data_std(self):
+        # set the seed
+        np.random.seed(self.seed)
+
+        # open the file
+        with self._input_jar as input_file:
+            
+            # skip rows
+            for _ in range(self._input_skip_rows):
+                next(input_file)
+
+            sum_dev_sqd = np.zeros(self.input_dim)
+            train_count = 0
+
+            # obtain the chunk of X_data
+            while True:
+                start_time = time.time()
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    X_data = np.loadtxt(input_file, delimiter=",", max_rows=self.chunk_size)
+
+                data_len = X_data.shape[0]
+
+                # split the data into training data
+                if data_len == 0:
+                    break
+
+                X_data = X_data[:,self._data_input_selector]
+
+                train_idxs, _, _ = self.get_tdt_idxs(data_len)
+
+                X_train = X_data[train_idxs]
+
+                sum_dev_sqd += ((X_train - self._train_mean) ** 2).sum(axis=0)
+                train_count += data_len
+        
+        self._train_std = np.sqrt(sum_dev_sqd / train_count)
 
     def set_data_output_props(self, output_csv_path, data_selector=np.s_[:], skip_rows=0, one_hot_width=None):
         """Set the label properties for the chunk object
         
         Args:
-            input_csv_path (str) : csv file path of data
+            output_csv_path (str) : csv file path of data
             data_selector (IndexExpression, default=None) : 1D index expression to select certain columns, if none specified will select all columns
             skip_rows (int, default=0) : number of rows to skip
             one_hot_width (list, default=None) : number of categories for one hot encoding
         """
 
-        self.output_csv_path = output_csv_path
-
         # get the opener function
-        self._output_opener, self._output_read_mode, self._output_encoding = self.get_opener_attrs(self.output_csv_path)
+        self._output_jar = JarOpener(output_csv_path)
 
         self._data_output_selector = data_selector
 
@@ -124,7 +289,7 @@ class Chunk:
         if one_hot_width_cand is None:
             self._one_hot_width = one_hot_width_cand
         elif isinstance(one_hot_width_cand, int):
-            dim = self.get_selector_dim(self._output_opener, self.output_csv_path, self._output_read_mode, self._output_encoding, self._data_output_selector)
+            dim = self.get_selector_dim(self._output_jar, self._data_output_selector)
 
             if dim == 1:
                 self._one_hot_width = one_hot_width_cand
@@ -138,81 +303,19 @@ class Chunk:
         if self.one_hot_width:
             dim = self.one_hot_width
         else:
-            dim = self.get_selector_dim(self._output_opener, self.output_csv_path, self._output_read_mode, self._output_encoding, self._data_output_selector)
+            dim = self.get_selector_dim(self._output_jar, self._data_output_selector)
 
         self.output_dim = dim
 
     @staticmethod
-    def get_selector_dim(opener, path, read_mode, encoding, data_selector):
+    def get_selector_dim(jar_opener, data_selector):
         """Return the dimension of selected data within file"""
-        with opener(path, mode=read_mode, encoding=encoding) as file:
+        with jar_opener as file:
             reader = csv.reader(file) 
             line = np.array(next(reader))
             selector_dim = len(line[data_selector])
 
         return selector_dim
-
-    def get_opener_attrs(self, file_path):
-        """
-        Args:
-            file_path (str) : file path string
-
-        Returns:
-            opener (function) : function to open file
-            read_mode (str) : read mode to use for opener
-            encoding (str) : encoding type
-        """
-        extension = self.get_file_extension(file_path)
-        opener, read_mode, encoding = self.extension_to_opener(extension)
-
-        return opener, read_mode, encoding
-
-    @staticmethod
-    def extension_to_opener(file_extension):
-        """Return the correct open function for the file extension
-        
-        Args:
-            file_extension (str) : file extension string
-        
-        Returns:
-            opener (function) : function to open file
-            read_mode (str) : read mode to use for opener
-            encoding (str) : encoding type
-        """
-        if file_extension == "csv":
-            opener = open
-            read_mode = "r"
-            encoding = None
-        elif file_extension == "csv.gz":
-            opener = gzip.open
-            read_mode = "rt"
-            encoding = "utf-8"
-        else:
-            raise Exception("File extension not supported")
-        
-        return opener, read_mode, encoding
-
-    @staticmethod
-    def get_file_extension(file_path):
-        """Get the file extension of a file path
-        
-        Args:
-            file_path (str) : file path string
-
-        Returns:
-            (str) The file extension 
-        """
-        # Define the regex pattern to match the file extension
-        pattern = r'\.(.+)$'
-        
-        # Use re.search to find the pattern in the file path
-        match = re.search(pattern, file_path)
-        
-        # If a match is found, return the matched file extension
-        if match:
-            return match.group(1)
-        else:
-            return None  # Return None if no extension is found
 
     def generate(self):
         """Generator to produce chunks from large data set split into train, dev, test
@@ -237,7 +340,7 @@ class Chunk:
         np.random.seed(self.seed)
 
         # open data and label files as file objects to decrease open and close overhead
-        with self._input_opener(self.input_csv_path, mode=self._input_read_mode, encoding=self._input_encoding) as input_file, self._output_opener(self.output_csv_path, mode=self._output_read_mode, encoding=self._output_encoding) as output_file:
+        with self._input_jar as input_file, self._output_jar as output_file:
             
             for _ in range(self._input_skip_rows):
                 next(input_file)
@@ -257,28 +360,39 @@ class Chunk:
 
                 X_data = X_data[:,self._data_input_selector]
                 y_data = y_data[:,self._data_output_selector]
-                end_time = time.time()
+                
                 #print(end_time-start_time)
                 
                 # datasets not the same size
                 if len(X_data) != len(y_data):
                     raise Exception("Input file and output file are not the same length")
-
-                shuffled_idxs = np.random.permutation(len(X_data))
-
+                
                 if self._sparse_dim:
                     X_data = OneHotArray(shape=(len(X_data),self._sparse_dim),idx_array=X_data)
 
                 if self._one_hot_width:
                     y_data = self.one_hot_labels(y_data)
 
-                X_train, y_train, X_dev, y_dev, X_test, y_test = self.tdt_split(X_data, y_data, shuffled_idxs)
+                train_idxs, dev_idxs, test_idxs = self.get_tdt_idxs(X_data.shape[0])
+
+                X_train = X_data[train_idxs]
+                y_train = y_data[train_idxs]
+
+                X_dev = X_data[dev_idxs]
+                y_dev = y_data[dev_idxs]
+
+                X_test = X_data[test_idxs]
+                y_test = y_data[test_idxs]
+
+                if self._standardize:
+                    X_train = (X_train - self._train_mean) / self._train_std
+                    X_dev = (X_dev - self._train_mean) / self._train_std
+                    X_test = (X_test - self._train_mean) / self._train_std
 
                 yield X_train, y_train, X_dev, y_dev, X_test, y_test
 
-
     def one_hot_labels(self, y_data):
-        """One hot labels from 
+        """One hot labels from y_data
         
         Args:
             y_data (numpy array)
@@ -292,45 +406,32 @@ class Chunk:
 
         return one_hot_labels
     
-    def tdt_split(self, X_data, y_data, shuffled_idxs):
-        """ Splits the data into train dev and test sets based on tdt_split, splits into entries and labels
+    def get_tdt_idxs(self, data_length):
+        """Retrieve indexes of train, dev, and test set for data of given length
         
         Args:
-            X_data (numpy array) :
-            y_data (numpy array)
-            shuffled_idxs (numpy array) : permutation of non-negative integers up to but not including the chunk size
-        
-        Returns:
-            X_train (numpy array) : training entries (num_training_examples x num_features) 
-            y_train (numpy array) : training labels (num_training_examples x num _features)
-            X_dev (numpy array) : development "..."
-            y_dev (numpy array) : development "..."
-            X_test (numpy array) : test "..."
-            y_test (numpy array) : test "..."
-        """
-        m, _ = X_data.shape
+            data_length (int) : length of the data to retrieve idxs for
 
-        # divide the data into train, dev, test
+        Returns:
+            train_idxs (numpy ndarray) 
+            dev_idxs (numpy ndarray) 
+            test_idxs (numpy ndarry) 
+        
+        """
+
+        shuffled_idxs = np.random.permutation(data_length)
+
         train_share = self.tdt_sizes[0]
         dev_share = self.tdt_sizes[1]
 
-        train_upper = round(train_share * m)
-        dev_upper = train_upper + round(dev_share * m)
+        train_upper = round(train_share * data_length)
+        dev_upper = train_upper + round(dev_share * data_length)
 
         train_idxs = shuffled_idxs[:train_upper]
         dev_idxs = shuffled_idxs[train_upper:dev_upper]
         test_idxs = shuffled_idxs[dev_upper:]
 
-        X_train = X_data[train_idxs]
-        y_train = y_data[train_idxs]
-
-        X_dev = X_data[dev_idxs]
-        y_dev = y_data[dev_idxs]
-
-        X_test = X_data[test_idxs]
-        y_test = y_data[test_idxs]
-
-        return X_train, y_train, X_dev, y_dev, X_test, y_test
+        return train_idxs, dev_idxs, test_idxs
 
     @property
     def tdt_sizes(self):
