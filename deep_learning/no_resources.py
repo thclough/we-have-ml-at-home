@@ -129,11 +129,11 @@ class ChunkBlock:
         self._input_flag = False
         self._output_flag = False
 
-    def set_data_input_props(self, input_csv_path, data_selector=np.s_[:], skip_rows=0, sparse_dim=None, standardize=False):
+    def set_data_input_props(self, input_jar, data_selector=np.s_[:], skip_rows=0, sparse_dim=None, standardize=False):
         """Set the data/input properties for the chunk object
         
         Args:
-            input_csv_path (str) : csv file path of data
+            input_jar (str) : jar opener for input data
             data_selector (IndexExpression, default=None) : 1D index expression to select certain columns, if none specified will select all columns
             skip_rows (int, default=0) : number of rows to skip
             sparse_dim (int, default=None) : dimensions of the sparse vectors, if applicable
@@ -141,7 +141,7 @@ class ChunkBlock:
         """
 
         # get the opener function
-        self._input_jar = JarOpener(input_csv_path)
+        self._input_jar = input_jar
 
         # select all columns if no data columns
         self._data_input_selector = data_selector
@@ -251,18 +251,19 @@ class ChunkBlock:
         
         self._train_std = np.sqrt(sum_dev_sqd / train_count)
 
-    def set_data_output_props(self, output_csv_path, data_selector=np.s_[:], skip_rows=0, one_hot_width=None):
+    def set_data_output_props(self, output_jar, data_selector=np.s_[:], skip_rows=0, one_hot_width=None):
         """Set the label properties for the chunk object
         
         Args:
-            output_csv_path (str) : csv file path of data
+            output_jar (JarOpener) : jar opener for output data
             data_selector (IndexExpression, default=None) : 1D index expression to select certain columns, if none specified will select all columns
             skip_rows (int, default=0) : number of rows to skip
             one_hot_width (list, default=None) : number of categories for one hot encoding
         """
 
         # get the opener function
-        self._output_jar = JarOpener(output_csv_path)
+        #self._output_jar = JarOpener(output_csv_path)
+        self._output_jar = output_jar
 
         self._data_output_selector = data_selector
 
