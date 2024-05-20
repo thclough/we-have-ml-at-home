@@ -1,4 +1,3 @@
-#%%
 import numpy as np
 import matplotlib.pyplot as plt
 #from we_have_ml_at_home.deep_learning import node_funcs
@@ -382,9 +381,9 @@ class SmoothNN:
 class ChunkyNN:
     pass
 
-class ChunkBlockNN(SmoothNN):
+class SuperChunkNN(SmoothNN):
     """NN class for chunk iterator for large datasets
-    see no_resources.ChunkBlock"""
+    see no_resources.SuperChunk"""
     def fit(self, 
             chunk_manager, 
             learning_rate=1, 
