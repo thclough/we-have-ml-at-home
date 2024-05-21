@@ -1,3 +1,4 @@
+#%%
 import numpy as np
 import csv
 import gzip
@@ -5,6 +6,7 @@ import re
 import time
 import warnings
 import traceback
+from contextlib import ExitStack
 
 #TODO
 ## apply one hot encoding for y_data just to OHA
@@ -14,10 +16,73 @@ import traceback
 
 ## can put one hot labels in txt
 
-def chop_up_data(source_path, tdt_split):
-    """Section given data source into train, test, and dev data sets"""
-    pass
+def chop_up_csv(source_path, split_dict, header=True, seed=100):
+    """Section given data source into different sets, 
+    multinomial draw for each line of data corresponding to file destination
+    
+    Args:
+        source_path (str) : path of file to break up
+        split_dict (dict) : {new file name -> output probability} dictionary, must sum to 1
+        header (bool, default=True) : if source file contains header or not
+        seed (int, default=100) : seed for hypergeometric draw
+    """
+    val_chop_up_csv(source_path, split_dict)
 
+    # create ordered key value pair 
+    ordered = [(name, prob) for name, prob in split_dict.items()]
+    ordered_names = [item[0] for item in ordered]
+    ordered_probs = [item[1] for item in ordered]
+
+    opener = JarOpener(source_path)
+    target_dir = get_file_dir(source_path)
+
+    with ExitStack() as stack:
+
+        orig_file = stack.enter_context(opener)
+        orig_file_reader = csv.reader(orig_file)
+
+        output_writers = [csv.writer(stack.enter_context(open(f"{target_dir}/{output_name}", "w", newline=""))) for output_name in ordered_names]
+
+        if header:
+            header = next(orig_file_reader)
+            for writer in output_writers:
+                writer.writerow(header)
+        
+        for row in orig_file_reader:
+            assigned = np.random.multinomial(1, ordered_probs, size=1).argmax()
+            output_writers[assigned].writerow(row)
+
+def val_chop_up_csv(source_path, split_dict):
+    
+    for file_name in split_dict.keys():
+        if not isinstance(file_name, str):
+            raise Exception("split_dict keys (file names) must be strings")
+
+    val_array = np.array(list(split_dict.values()))
+
+    if np.any(val_array < 0) or np.any(val_array > 1):
+        raise Exception("Probs must be between 0 and 1 inclusive")
+
+    if val_array.sum() != 1:
+        raise Exception("Probs must sum to 1")
+
+def get_file_dir(source_path: str) -> str:
+    """Retrieve directory of source path file"""
+
+    pattern = r'(\S+/{1})\S+'
+
+    # Use re.search to find the pattern in the file path
+    match = re.search(pattern, source_path)
+    
+    # If a match is found, return the matched file extension
+    if match:
+        return match.group(1)
+    else:
+        return None  # Return None if no extension is found
+
+print(get_file_dir("/Users/Tighe_Clough/Desktop/Programming/Projects/i-spy-tickers/data/examples_test.csv"))
+
+#%%
 class JarOpener:
     """A file opener to read a file at a given path
     

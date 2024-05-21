@@ -5,7 +5,6 @@ import node_funcs
 import time
 
 # TODO
-## forward pass/za vals optimization(only store last layers), predictions and average loss
 ## Chunk fit
 ## different types of regularization
 ## different types of loss
