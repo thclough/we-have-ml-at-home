@@ -325,9 +325,6 @@ class SmoothNN:
             epoch (int) : epoch number to graph new data for
             num_epochs (int) : total number of epochs
         """
-        print(list(range(1, epoch+1, epoch_gap)))
-        print(self._train_costs)
-        print(self._dev_costs)
         if epoch == 1:
             self.train_line, = ax.plot(range(1,2), self._train_costs, label="Average training loss")
             if self._dev_flag:
@@ -422,7 +419,6 @@ class ChunkNN(SmoothNN):
             ax.set_xlabel("Epoch")
             ax.set_ylabel("Average Loss")
 
-
         for epoch in range(num_epochs):
             print(f"Epoch: {epoch}")
             start_time = time.time()
@@ -500,6 +496,9 @@ class SuperChunkNN(SmoothNN):
             learning_rate=1, 
             reg_strength=0.0001,
             num_epochs=30,
+            epoch_gap=5,
+            batch_prob=.01,
+            param_path=None,
             verbose=True, 
             display=True):
         """Feeds data from chunk generator into model for training
@@ -508,6 +507,10 @@ class SuperChunkNN(SmoothNN):
         """
         # set attributes
         self.super_chunk = super_chunk
+        if self.super_chunk.tdt_sizes[1] > 0:
+            self._dev_flag = True
+        else:
+            self._dev_flag = False
         self.learning_rate = learning_rate
         self.reg_strength = reg_strength
 
@@ -518,24 +521,86 @@ class SuperChunkNN(SmoothNN):
         super()._get_initial_params() 
 
         # initialize lists for costs
-        self.batch_train_costs = []
-        self.epoch_dev_costs = []
+        self._train_costs = []
+        self._dev_costs = []
+
+        if display:
+            fig, ax = plt.subplots()
+            ax.set_title(f"Average Loss ({self.loss.name}) vs. Epoch Gap")
+            ax.set_xlabel("Epoch")
+            ax.set_ylabel("Average Loss")
 
         for epoch in range(num_epochs):
             print(f"epoch: {epoch}")
+            start_time = time.time()
             for data in self.super_chunk.generate():
-                X_train, y_train, X_dev, y_dev, _, _ = data
+                X_train, y_train, _, _, _, _ = data
 
                 super()._batch_total_pass(X_train, y_train)
+                end_time = time.time()
+                print(f"{end_time-start_time}")
+                if verbose:
+                    if np.random.binomial(1, batch_prob):
+                        sampled_batch_loss = super().avg_loss(X_train, y_train)
 
-                #get training and dev loss
-                batch_train_cost = super().avg_loss(X_train, y_train)
+                        print(f"\t Sampled batch loss: {sampled_batch_loss}")
+                        
+                start_time = time.time()
                 
-                self.batch_train_costs.append(batch_train_cost)
+            if param_path:
+                joblib.dump(self.params,param_path)
 
-            if verbose:
-                print(f"Batch training cost: {self.batch_train_costs[-1]}")
+            # record costs after each epoch gap
+            if epoch % epoch_gap == 0:
+                epoch_train_cost, epoch_dev_cost = self.get_td_costs()
+                self._train_costs.append(epoch_train_cost)
+                if verbose:
+                    print(f"\t Training cost: {epoch_train_cost}")
 
+                if epoch_dev_cost:
+                    self._dev_costs.append(epoch_dev_cost)
+                    if verbose:
+                        print(f"\t Dev cost: {epoch_dev_cost}")
+
+                if display:
+                    true_epoch = epoch + 1
+                    super()._update_epoch_plot(fig, ax, true_epoch, num_epochs, epoch_gap)
+                    
+            
+
+    def get_td_costs(self):
+
+        train_loss_sum = 0
+        train_length = 0
+
+        dev_loss_sum = 0
+        dev_length = 0
+
+        for X_train, y_train, X_dev, y_dev, _, _ in self.super_chunk.generate():
+            y_train_probs = super().predict_prob(X_train)
+            
+            chunk_train_loss_sum = np.sum(self.loss.forward(y_train_probs, y_train))
+            chunk_train_length = X_train.shape[0]
+            
+            train_loss_sum += chunk_train_loss_sum
+            train_length += chunk_train_length
+            
+            if self._dev_flag:
+                y_dev_probs = super().predict_prob(X_dev)
+                chunk_dev_loss_sum = np.sum(self.loss.forward(y_dev_probs, y_dev))
+                chunk_dev_length = X_dev.shape[0]
+
+                dev_loss_sum += chunk_dev_loss_sum
+                dev_length += chunk_dev_length
+
+        train_cost = train_loss_sum / train_length
+        if self._dev_flag:
+            dev_cost = dev_loss_sum / dev_length
+        else:
+            dev_cost = None
+
+        return train_cost, dev_cost
+            
     def accuracy(self):
         """Evaluate accuracy efficiently
         
