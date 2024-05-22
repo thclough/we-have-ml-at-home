@@ -419,17 +419,20 @@ class ChunkNN(SmoothNN):
             ax.set_xlabel("Epoch")
             ax.set_ylabel("Average Loss")
 
+
         for epoch in range(num_epochs):
             print(f"Epoch: {epoch}")
-
+            start_time = time.time()
             for X_train, y_train in train_chunk.generate():
                 super()._batch_total_pass(X_train, y_train)
-
+                end_time = time.time()
+                print(end_time-start_time)
                 if verbose:
                     if np.random.binomial(1, batch_prob):
                         sampled_batch_loss = super().avg_loss(X_train, y_train)
 
                         print(f"\t Sampled batch loss: {sampled_batch_loss}")
+                start_time = time.time()
 
             if param_path:
                 joblib.dump(self.params,param_path)

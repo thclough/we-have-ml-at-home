@@ -142,22 +142,71 @@ class BCE:
             y_true (vector): ground_truth labels
 
         Returns:
-            (vector) : binary cross entropy
+            (vector) : binary cross entropy loss
         """
         return -(y_true * np.log(y_pred) + (1-y_true) * np.log(1-y_pred))
     
-    def backward(y_pred,y_true):
+    @staticmethod
+    def backward(y_pred, y_true):
         """Compute the gradient with respect to linear combo (z's)
         
         Args: 
             y_pred (vector): output probabilities
             y_true (vector): ground_truth labels
 
-        ReturnsL
+        Returns:
             (vector) : Jacobian wrt linear combination
         """
         return y_pred - y_true
+
+class WeightedBCE(BCE):
+    """For imbalanced dataset"""
+    name = "Weighted Binary Cross Entropy"
     
+    def __init__(self, prop_neg):
+        """
+        Args:
+            prop_neg (float) : proportion of examples that are negative
+        """
+        self._weight_neg = .5 / prop_neg
+        self._weight_pos = .5 / (1-prop_neg)
+
+    def forward(self, y_pred, y_true):
+        """
+        Args:
+            y_pred (vector): output probabilities
+            y_true (vector): ground truth labels
+
+        Returns:
+            (vector) : binary cross entropy
+        """
+        weight_vector = self._weight_pos * y_true + self._weight_neg * (1-y_true)
+        return weight_vector * super().forward(y_pred, y_true)
+
+    def backward(self, y_pred, y_true):
+        """
+
+        Args: 
+            y_pred (vector): output probabilities
+            y_true (vector): ground truth labels
+
+        Returns:
+            (vector) : Jacobian wrt linear combination
+        """
+        weight_vector = self._weight_pos * y_true + self._weight_neg * (1-y_true)
+        return weight_vector * super().backward(y_pred, y_true)
+    
+    def _get_weight_vector(self, y_true):
+        """Obtain the correct weight vector for forward and backward
+        
+        Args:
+            y_true (vector) : ground truth labels
+
+        Returns:
+            (vector) : weight vector with same dimensions as y_true
+        """
+        return self._weight_pos * y_true + self._weight_neg * (1-y_true)
+
 class CE:
     name = "Cross Entropy"
     """regular cross entropy for multi-class classification"""
