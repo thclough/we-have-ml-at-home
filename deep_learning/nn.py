@@ -6,7 +6,10 @@ import time
 import joblib
 
 # TODO
-## Chunk fit
+## Superchunk epoch costs and display
+## Weighting BCE and derivative for imbalanced dataset
+## Estimating time to completion 
+
 ## different types of regularization
 ## different types of loss
 ## learning rate schedulers/optimizers

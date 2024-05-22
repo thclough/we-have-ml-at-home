@@ -5,6 +5,7 @@ import re
 import time
 import warnings
 import traceback
+import utils
 from contextlib import ExitStack
 
 #TODO
@@ -26,7 +27,7 @@ def chop_up_csv(source_path, split_dict, header=True, seed=100):
         header (bool, default=True) : if source file contains header or not
         seed (int, default=100) : seed for multinomial draw
     """
-    val_chop_up_csv(source_path, split_dict)
+    _val_chop_up_csv(source_path, split_dict)
 
     # create ordered key value pair 
     ordered = [(name, prob) for name, prob in split_dict.items()]
@@ -34,7 +35,7 @@ def chop_up_csv(source_path, split_dict, header=True, seed=100):
     ordered_probs = [item[1] for item in ordered]
 
     opener = JarOpener(source_path)
-    target_dir = get_file_dir(source_path)
+    target_dir = utils.get_file_dir(source_path)
 
     with ExitStack() as stack:
 
@@ -52,7 +53,7 @@ def chop_up_csv(source_path, split_dict, header=True, seed=100):
             assigned = np.random.multinomial(1, ordered_probs, size=1).argmax()
             output_writers[assigned].writerow(row)
 
-def val_chop_up_csv(source_path, split_dict):
+def _val_chop_up_csv(source_path, split_dict):
     
     for file_name in split_dict.keys():
         if not isinstance(file_name, str):
@@ -65,20 +66,6 @@ def val_chop_up_csv(source_path, split_dict):
 
     if val_array.sum() != 1:
         raise Exception("Probs must sum to 1")
-
-def get_file_dir(source_path: str) -> str:
-    """Retrieve directory of source path file"""
-
-    pattern = r'(\S+/{1})\S+'
-
-    # Use re.search to find the pattern in the file path
-    match = re.search(pattern, source_path)
-    
-    # If a match is found, return the matched file extension
-    if match:
-        return match.group(1)
-    else:
-        return None  # Return None if no extension is found
 
 class JarOpener:
     """A file opener to read a file at a given path
@@ -194,6 +181,10 @@ class Chunk:
             self._set_training_data_mean()
             self._set_training_data_std()
 
+        # get length of the data
+        self._set_num_data_lines()
+        self._num_chunks = self._num_data_lines / self.chunk_size
+
     @property
     def input_dim(self):
         return self._input_dim
@@ -211,6 +202,15 @@ class Chunk:
             dim = self.get_selector_dim(self._input_jar, self._data_input_selector)
 
         self._input_dim = dim
+
+    def _set_num_data_lines(self):
+        """Retrieve total length of the data """
+        with self._input_jar as data_file:
+            for _ in range(self._input_skiprows):
+                next(data_file)
+            data_lines = sum(1 for line in data_file)
+
+        self._num_data_lines = data_lines
 
     def set_data_output_props(self, output_jar, data_selector=np.s_[:], skiprows=0, one_hot_width=None):
         """Set the label properties for the chunk object
@@ -331,7 +331,8 @@ class Chunk:
 
             if self._standardize:
                 if self._train_chunk or self._linked_chunk:
-                    X_data = (X_data - self._train_mean) / self._train_std
+                    #X_data = (X_data - self._train_mean) / self._train_std
+                    X_data = (X_data - 33.318) / 78.567
 
             yield X_data, y_data
 
