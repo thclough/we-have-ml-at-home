@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 #from we_have_ml_at_home.deep_learning import node_funcs
 import node_funcs
 import time
+import joblib
 
 # TODO
 ## Chunk fit
@@ -84,7 +85,7 @@ class SmoothNN:
         self.batch_size = batch_size
         self.learning_rate = learning_rate
         self.reg_strength = reg_strength
-        self.dev_flag = False # flag if there is a dev set
+        self._dev_flag = False # flag if there is a dev set
 
         # validate inputs def validate_structure
         self._val_structure
@@ -93,7 +94,7 @@ class SmoothNN:
             if not (X_dev is not None and y_dev is not None):
                 raise Exception("Please input both X_dev and y_dev")
             else:
-                self.dev_flag = True
+                self._dev_flag = True
 
         n_train,_ = X_train.shape
 
@@ -105,8 +106,8 @@ class SmoothNN:
         self._get_initial_params() # use current params
 
         # initialize lists for costs
-        self.cost_train = []
-        self.cost_dev = []
+        self._train_costs = []
+        self._dev_costs = []
         
         # set up loss plot
         if display:
@@ -119,12 +120,12 @@ class SmoothNN:
         for epoch in range(num_epochs):
             self._gradient_descent_epoch(X_train, y_train)
             # calculate avg loss for dev and test sets
-            self.cost_train.append(self.avg_loss(X_train, y_train))
-            if self.dev_flag:
-                self.cost_dev.append(self.avg_loss(X_dev, y_dev))
+            self._train_costs.append(self.avg_loss(X_train, y_train))
+            if self._dev_flag:
+                self._dev_costs.append(self.avg_loss(X_dev, y_dev))
 
             if verbose:
-                print(f"Training Avg Loss: {self.cost_train[-1]}")
+                print(f"Training Avg Loss: {self._train_costs[-1]}")
                 
             if display:
                 # epoch in loop indexed at 0, add 1 to start indexing at 1
@@ -312,7 +313,7 @@ class SmoothNN:
         # return avg of the losses
         return np.mean(self.loss.forward(y_pred, y))
 
-    def _update_epoch_plot(self, fig, ax, epoch, num_epochs):
+    def _update_epoch_plot(self, fig, ax, epoch, num_epochs, epoch_gap=1):
         """Updates training plot to display average losses
 
         Args:
@@ -321,20 +322,22 @@ class SmoothNN:
             epoch (int) : epoch number to graph new data for
             num_epochs (int) : total number of epochs
         """
-        
+        print(list(range(1, epoch+1, epoch_gap)))
+        print(self._train_costs)
+        print(self._dev_costs)
         if epoch == 1:
-            self.train_line, = ax.plot(range(1,epoch+1), self.cost_train, label="Average training loss")
-            if self.dev_flag:
-                self.dev_line, = ax.plot(range(1, epoch+1), self.cost_dev, label="Average dev loss")
+            self.train_line, = ax.plot(range(1,2), self._train_costs, label="Average training loss")
+            if self._dev_flag:
+                self.dev_line, = ax.plot(range(1, 2), self._dev_costs, label="Average dev loss")
             ax.legend()
         else:
-            self.train_line.set_data(range(1,epoch+1), self.cost_train)
-            if self.dev_flag:
-                self.dev_line.set_data(range(1,epoch+1), self.cost_dev)
+            self.train_line.set_data(range(1,epoch+1, epoch_gap), self._train_costs)
+            if self._dev_flag:
+                self.dev_line.set_data(range(1,epoch+1, epoch_gap), self._dev_costs)
 
-        max_val = np.max(np.concatenate([self.cost_dev, self.cost_train]))
-        ax.set(xlim=[0,num_epochs], ylim=[0,max_val])
-        plt.pause(.1)
+        max_val = np.max(np.concatenate([self._dev_costs, self._train_costs]))
+        ax.set(xlim=[0,num_epochs], ylim=[min(0, max_val*2),max(0, max_val*2)])
+        plt.pause(.2)
 
     def predict_labels(self, X):
         """Predict labels of given X examples
@@ -376,15 +379,118 @@ class SmoothNN:
 
         return accuracy
     
+class ChunkNN(SmoothNN):
+    """NN class for chunking data from separate locations using no_resources.Chunk"""
+    def fit(self,
+            train_chunk,
+            dev_chunk=None,
+            learning_rate=1, 
+            reg_strength=0.0001,
+            num_epochs=30,
+            epoch_gap=5,
+            batch_prob=.01,
+            param_path=None,
+            verbose=True, 
+            display=True):
+        
+        self.learning_rate = learning_rate
+        self.reg_strength = reg_strength
+        self._dev_flag = False # flag if there is a dev set
 
-class ChunkyNN:
-    pass
+        if dev_chunk:
+            self._dev_flag = True
+
+        if not train_chunk._train_chunk:
+            raise Exception("Given train chunk must be a valid train chunk (_train_chunk attribute set to True)")
+
+        # validate structure
+        super()._val_structure
+
+        # get initial params
+        super()._get_initial_params()
+
+        # initialize lists for costs
+        self._train_costs = []
+        self._dev_costs = []
+
+        if display:
+            fig, ax = plt.subplots()
+            ax.set_title(f"Average Loss ({self.loss.name}) vs. Epoch Gap")
+            ax.set_xlabel("Epoch")
+            ax.set_ylabel("Average Loss")
+
+        for epoch in range(num_epochs):
+            print(f"Epoch: {epoch}")
+
+            for X_train, y_train in train_chunk.generate():
+                super()._batch_total_pass(X_train, y_train)
+
+                if verbose:
+                    if np.random.binomial(1, batch_prob):
+                        sampled_batch_loss = super().avg_loss(X_train, y_train)
+
+                        print(f"\t Sampled batch loss: {sampled_batch_loss}")
+
+            if param_path:
+                joblib.dump(self.params,param_path)
+
+            # record costs after each epoch gap
+            if epoch % epoch_gap == 0:
+                epoch_train_cost = self.chunk_loss(train_chunk)
+                self._train_costs.append(epoch_train_cost)
+                if verbose:
+                    print(f"\t Training cost: {epoch_train_cost}")
+
+                if self._dev_flag:
+                    epoch_dev_cost = self.chunk_loss(dev_chunk)
+                    self._dev_costs.append(epoch_dev_cost)
+                    if verbose:
+                        print(f"\t Dev cost: {epoch_dev_cost}")
+
+                if display:
+                    true_epoch = epoch + 1
+                    super()._update_epoch_plot(fig, ax, true_epoch, num_epochs, epoch_gap)
+                
+    def chunk_loss(self, eval_chunk):
+        """"Calculate loss on the eval chunk"""
+        
+        loss_sum = 0
+        length = 0
+
+        for X_data, y_data in eval_chunk.generate():
+            y_probs = super().predict_prob(X_data)
+
+            chunk_loss_sum = np.sum(self.loss.forward(y_probs, y_data))
+            chunk_length = X_data.shape[0]
+
+            loss_sum += chunk_loss_sum
+            length += chunk_length
+
+        return loss_sum / length
+
+    def accuracy(self, eval_chunk):
+        
+        eval_right_sum = 0
+        eval_len_sum = 0
+
+        for X_eval, y_eval in eval_chunk.generate():
+            y_pred = super().predict_labels(X_eval)
+
+            if self.loss != node_funcs.BCE:
+                y_eval = np.argmax(y_eval, axis=1)
+
+            eval_right_sum += (y_pred == y_eval).sum()
+            eval_len_sum += X_eval.shape[0]
+        
+        accuracy = eval_right_sum / eval_len_sum
+
+        return accuracy
 
 class SuperChunkNN(SmoothNN):
-    """NN class for chunk iterator for large datasets
+    """NN class for SuperChunk iterator for large datasets
     see no_resources.SuperChunk"""
     def fit(self, 
-            chunk_manager, 
+            super_chunk, 
             learning_rate=1, 
             reg_strength=0.0001,
             num_epochs=30,
@@ -393,10 +499,9 @@ class SuperChunkNN(SmoothNN):
         """Feeds data from chunk generator into model for training
         
         Args:
-            chunk_generator ()
         """
         # set attributes
-        self.chunk_manager = chunk_manager
+        self.super_chunk = super_chunk
         self.learning_rate = learning_rate
         self.reg_strength = reg_strength
 
@@ -412,16 +517,11 @@ class SuperChunkNN(SmoothNN):
 
         for epoch in range(num_epochs):
             print(f"epoch: {epoch}")
-            start_train_time = time.time()
-            for data in self.chunk_manager.generate():
+            for data in self.super_chunk.generate():
                 X_train, y_train, X_dev, y_dev, _, _ = data
 
                 super()._batch_total_pass(X_train, y_train)
 
-                cur_train_time = time.time()
-                
-                start_train_time = cur_train_time
-                
                 #get training and dev loss
                 batch_train_cost = super().avg_loss(X_train, y_train)
                 
@@ -429,9 +529,6 @@ class SuperChunkNN(SmoothNN):
 
             if verbose:
                 print(f"Batch training cost: {self.batch_train_costs[-1]}")
-
-        # avg cost train and cost dev for the before you update display for the epoch or put somewhere else then average, cost_train_batch, 
-            # should you make a whole new type of graph? after a few passes 
 
     def accuracy(self):
         """Evaluate accuracy efficiently
@@ -451,13 +548,13 @@ class SuperChunkNN(SmoothNN):
         test_right_sum = 0
         test_len_sum = 0
 
-        for data in self.chunk_manager.generate():
+        for data in self.super_chunk.generate():
             X_train, y_train, X_dev, y_dev, X_test, y_test = data
 
             # calculate activation values for each layer (includes predicted values)
-            y_pred_train = self.predict_labels(X_train)
-            y_pred_dev = self.predict_labels(X_dev)
-            y_pred_test = self.predict_labels(X_test)
+            y_pred_train = super().predict_labels(X_train)
+            y_pred_dev = super().predict_labels(X_dev)
+            y_pred_test = super().predict_labels(X_test)
 
             if self.loss != node_funcs.BCE:
                 y_train = np.argmax(y_train,axis=1)

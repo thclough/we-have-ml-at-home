@@ -1,4 +1,3 @@
-#%%
 import numpy as np
 import csv
 import gzip
@@ -9,6 +8,7 @@ import traceback
 from contextlib import ExitStack
 
 #TODO
+## __iter__ and __next__ for generate
 ## apply one hot encoding for y_data just to OHA
 ## optimizing chunk size based on operations (but would have to peek at operations)
 
@@ -24,7 +24,7 @@ def chop_up_csv(source_path, split_dict, header=True, seed=100):
         source_path (str) : path of file to break up
         split_dict (dict) : {new file name -> output probability} dictionary, must sum to 1
         header (bool, default=True) : if source file contains header or not
-        seed (int, default=100) : seed for hypergeometric draw
+        seed (int, default=100) : seed for multinomial draw
     """
     val_chop_up_csv(source_path, split_dict)
 
@@ -80,9 +80,6 @@ def get_file_dir(source_path: str) -> str:
     else:
         return None  # Return None if no extension is found
 
-print(get_file_dir("/Users/Tighe_Clough/Desktop/Programming/Projects/i-spy-tickers/data/examples_test.csv"))
-
-#%%
 class JarOpener:
     """A file opener to read a file at a given path
     
@@ -334,7 +331,7 @@ class Chunk:
 
             if self._standardize:
                 if self._train_chunk or self._linked_chunk:
-                    X_data = (X_data - self._train_mean) / self._train_mean
+                    X_data = (X_data - self._train_mean) / self._train_std
 
             yield X_data, y_data
 
@@ -865,7 +862,7 @@ class ChunkBlock:
                     X_train = (X_train - self._train_mean) / self._train_std
                     X_dev = (X_dev - self._train_mean) / self._train_std
                     X_test = (X_test - self._train_mean) / self._train_std
-
+            
                 yield X_train, y_train, X_dev, y_dev, X_test, y_test
 
     def one_hot_labels(self, y_data):
