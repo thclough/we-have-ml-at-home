@@ -994,8 +994,19 @@ class OneHotArray:
                 raise Exception("No negative indices allowed (besides -1 which represents null space)")
 
         return filtered_col_idxs
+
+    def to_array(self):
+
+        array = np.zeros(self.shape)
+
+        for row_idx, col_idxs in self.idx_rel.items():
+            for col_idx in col_idxs:
+                array[row_idx, col_idx] = 1
+
+        return array
     
     def __matmul__(self, other):
+        
         # validation
         if other.ndim != 2:
             raise Exception("Dimensions of composite transformations must be 2")
@@ -1003,17 +1014,32 @@ class OneHotArray:
         if isinstance(other, np.ndarray): #sparse - dense multiplication
             # validation
             if self.shape[1] != other.shape[0]:
-                    raise Exception("Inner dimensions must match")
+                raise Exception("Inner dimensions must match")
             outside_dims = (self.shape[0], other.shape[1])
+            # qualify Row Sparse Array
+            if len(self.idx_rel) < .5 * self.shape[0]:
+                row_idxs = []
+                product = np.zeros((len(self.idx_rel), other.shape[1]))
 
-            product = np.zeros(outside_dims)
+                counter = 0
+                for row_idx, col_idxs in self.idx_rel.items():
+                    row_idxs.append(row_idx)
+                    product[counter] = other[col_idxs].sum(axis=0)
+                    counter+=1
 
-            for row_idx, col_idxs in self.idx_rel.items():
-                product[row_idx] = other[col_idxs].sum(axis=0)
+                return RowSparseArray(row_idx_vector=np.array(row_idxs), 
+                                      dense_row_array=product,
+                                      total_array_rows=self.shape[0])
+            else:
+                product = np.zeros(outside_dims)
+
+                for row_idx, col_idxs in self.idx_rel.items():
+                    product[row_idx] = other[col_idxs].sum(axis=0)
 
             return product
+        
         elif isinstance(other, OneHotArray):
-            pass
+            return NotImplemented
         else:
             raise Exception("OneHotArray can only matrix multiply with numpy array or another OneHotArray")
 
@@ -1129,10 +1155,10 @@ class OneHotArray:
     @property
     def T(self):
         """create a transpose of the one-hot array"""
-        
+
         transpose_idx_rel = {}
 
-        new_shape = (self.shape[1], self.shape[0])
+        newshape = (self.shape[1], self.shape[0])
 
         for row_idx, row in self.idx_rel.items():
             for col_idx in row:
@@ -1142,7 +1168,7 @@ class OneHotArray:
                     transpose_idx_rel[col_idx] = [row_idx]
         
         #transpose_idx_vals =  [transpose_idx_rel[idx] for idx in range(len(transpose_idx_rel))]
-        new = OneHotArray(shape=new_shape, oha_dict=transpose_idx_rel)
+        new = OneHotArray(shape=newshape, oha_dict=transpose_idx_rel)
 
         return new
     
@@ -1171,3 +1197,168 @@ class OneHotArray:
 
     def __str__(self):
         return str(self.idx_rel)
+
+class RowSparseArray:
+    """Row vectors assumed to be dense, column vectors assumed to be sparse, many zero vector rows"""
+
+    def __init__(self, row_idx_vector, dense_row_array, total_array_rows, offset=0):
+        """
+        Args:
+            row_idx_vector (numpy ndarray) : list of row indices that are dense
+            dense_row_array (numpy ndarray) : stacked rows that are dense
+            total_array_rows (tuple) : number of rows in the array
+            offset (numeric, default = 0) : element-wise offset to true matrix
+        
+        """
+        self._val_init(row_idx_vector, dense_row_array, total_array_rows, offset)
+
+        self._row_idx_vector = row_idx_vector
+        self._dense_row_array = dense_row_array
+        self.shape = (total_array_rows, dense_row_array.shape[1])
+        # offset for addition and subtraction
+        self._offset = offset
+
+    @staticmethod
+    def _val_init(row_idx_vector, dense_row_array, total_array_rows, offset):
+        
+        if not isinstance(offset, (float, int)):
+            raise TypeError("Offset must be int or float")
+
+        if row_idx_vector.ndim != 1:
+            raise Exception(f"Row index vector must be a vector with one dimension, not {row_idx_vector.ndim}")
+
+        if dense_row_array.ndim != 2:
+            raise Exception(f"Row index vector must be a vector with one dimension, not {dense_row_array.ndim}")
+
+        if len(row_idx_vector) != len(dense_row_array):
+            raise Exception(f"Every row index should correspond to exactly one row vector in the dense_row_array.\
+                            There are {len(row_idx_vector)} row indices and {len(dense_row_array)} rows in dense row array")
+        
+        if np.unique(row_idx_vector).size != row_idx_vector.size:
+            raise Exception("Cannot have duplicate row indices")
+        
+        if total_array_rows < len(row_idx_vector):
+            raise Exception("Total array rows must be greater than or equal to dense row vectors")
+    
+    def to_array(self):
+        
+        array = np.full(self.shape, -self._offset)
+
+        for row_idx, col_vals in zip(self._row_idx_vector, self._dense_row_array):
+            array[row_idx] = col_vals - self._offset
+ 
+        return array
+    
+    def subtract_from_update(self, array_to_update, copy=False):
+        """Update numpy array by subtracting RowMatrixArray from numpy array to update
+        
+        Args:
+            array_to_update (numpy ndarray) : array to update in memory
+        """
+        
+        if self.shape != array_to_update.shape:
+            raise Exception(f"Array shapes must be the size must be the same,\
+                            RowSparseArray is {self.shape} while array to update is {array_to_update.shape}")
+
+        if copy:
+            array_to_update = np.copy(array_to_update)
+
+        for row_idx, row_vec in zip(self._row_idx_vector, self._dense_row_array):
+            array_to_update[row_idx] = array_to_update[row_idx] - row_vec
+
+        if self._offset:
+            array_to_update += self._offset
+        
+        return array_to_update
+        
+
+    def __array_ufunc__(self, ufunc, method, *inputs, **kwargs):
+
+        if ufunc != np.add:
+            raise Exception("Binary operation not supported")
+        
+        if ufunc == np.add:
+            item1 = inputs[0]
+            item2 = inputs[1]
+            if isinstance(item2, RowSparseArray):
+                return item2 + item1
+
+    def __add__(self, other): 
+        # have to support easy addition with numpy 
+        if isinstance(other, (float, int)):
+            new_offset = self._offset - other
+            return RowSparseArray(row_idx_vector=self._row_idx_vector, 
+                                  dense_row_array=self._dense_row_array, 
+                                  total_array_rows=self.shape[0],
+                                  offset=new_offset)
+        if isinstance(other, np.ndarray):
+            other = np.copy(other)
+            for row_idx, row_vec in zip(self._row_idx_vector, self._dense_row_array):
+                other[row_idx] = other[row_idx] + row_vec
+
+            if self._offset:
+                other -= self._offset
+            return other
+        return NotImplemented
+    
+    def __radd__(self, other):
+        if isinstance(other, (float, int)):
+            return self + other
+        elif isinstance(other, np.ndarray):
+            print("hello")
+        else:
+            return NotImplemented
+    
+    def __mul__ (self, other):
+        if isinstance(other, (float, int)):
+            return RowSparseArray(row_idx_vector=self._row_idx_vector, 
+                                  dense_row_array=self._dense_row_array * other, 
+                                  total_array_rows=self.shape[0],
+                                  offset=self._offset * other)
+        else:
+            return NotImplemented
+    
+    def __rmul__(self,other):
+        if isinstance(other, (float, int)):
+            return self * other
+        else:
+            return NotImplemented
+        
+    def __sub__(self, other):
+        if isinstance(other, (float, int)):
+            return self + -other
+        else:
+            return NotImplemented
+        
+    def __neg__(self):
+        return -1 * self
+        
+    def __rsub__(self, other):
+        if isinstance(other, (float, int)):
+            return -1 * self + other
+        else:
+            return NotImplemented
+    
+    def __eq__(self, other):
+        if isinstance(other, RowSparseArray):
+            for attr, val in vars(self).items():
+                try:
+                    other_val = getattr(other, attr)
+                except AttributeError:
+                    return False
+                
+                if isinstance(val, np.ndarray):
+                    if not np.allclose(val, other_val):
+                        return False
+                elif isinstance(val, (float, int)):
+                    if not val == other_val:
+                        return False
+            return True
+        elif isinstance(other, np.ndarray):
+            pass
+        else:
+            return TypeError(f"Cannot evaluate equivalence between RowSparseMatrix and {type(other)}")
+
+    def __str__(self):
+        return f"Row Indices:\n{self._row_idx_vector}\nDense Array:\n{self._dense_row_array}\nShape: {self.shape}\nOffset: {self._offset}"
+

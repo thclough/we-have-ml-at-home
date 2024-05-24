@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import node_funcs
 import time
 import joblib
+import no_resources
 
 # TODO
 ## Superchunk epoch costs and display
@@ -91,7 +92,7 @@ class SmoothNN:
         self._dev_flag = False # flag if there is a dev set
 
         # validate inputs def validate_structure
-        self._val_structure
+        self._val_structure()
 
         if (X_dev is not None) or (y_dev is not None):
             if not (X_dev is not None and y_dev is not None):
@@ -191,16 +192,29 @@ class SmoothNN:
 
     def _batch_total_pass(self, X_train_batch, y_train_batch):
         """forward propagation, backward propagation and parameter updates for """
+        time3 = time.time()
         # forward pass
         node_vals_batch = self._forward_prop(X_train_batch)
+        time4 = time.time()
+        # print(f"Time for forward: {time4-time3}")
 
         # perform back prop to obtain gradients
         grad_dict = self._backward_prop(X_train_batch, y_train_batch, node_vals_batch)
-        
+        time5 = time.time()
+        print(f"time for backwards {time5-time4}")
+
         # update params
         for param in self.params:
-            self.params[param] = self.params[param] - (self.learning_rate * grad_dict[param])
 
+            gradient = grad_dict[param]
+
+            if isinstance(gradient, no_resources.RowSparseArray):
+                (self.learning_rate * gradient).subtract_from_update(self.params[param])
+            else:
+                self.params[param] = self.params[param] - (self.learning_rate * gradient)
+        time6 = time.time()
+        print(f"Time for params update {time6-time5}")
+        
     def _forward_prop(self, X_train):
         """Perform forward pass in neural net while storing intermediaries. 
         
@@ -241,14 +255,15 @@ class SmoothNN:
             za_vals (dictionary) : dictionary of node precursors and activation values
                 where "an" or "an" would correspond to the nth layer indexed at 0 
         """
-
+        print("Enter Backprop")
         # get number of training examples
         n = len(X)
 
         grad_dict = {}
         # go through the layers backwards
         for layer in range(self.num_layers-1,0,-1):
-            
+
+            time0_1 = time.time()
             # get the node precursors (z's) and activation values
             a_behind = za_vals[f"a{layer-1}"]
             a_ahead = za_vals[f"a{layer}"]
@@ -265,8 +280,19 @@ class SmoothNN:
                 da_dz_ahead = activation.backward(z_ahead)
                 dJ_dz_ahead = dJ_da_ahead * da_dz_ahead
 
-            grad_dict[f"W{layer}"] = (1/n) * (a_behind.T @ dJ_dz_ahead) + 2 * self.reg_strength * W
-            grad_dict[f"b{layer}"] = (dJ_dz_ahead).mean(axis=0)
+            time0_3 = time.time()
+
+            # cases for efficiency, for regularization, operating on large W matrix (even with reg strength of 0)
+            # can be very time expensive
+            if self.reg_strength == 0:
+                grad_dict[f"W{layer}"] = a_behind.T @ (dJ_dz_ahead * (1/n)) 
+            else:
+                grad_dict[f"W{layer}"] = a_behind.T @ (dJ_dz_ahead * (1/n)) + 2 * self.reg_strength * W
+
+            grad_dict[f"b{layer}"] = dJ_dz_ahead.mean(axis=0)
+
+            time0_4 = time.time()
+            print(f"Time for grad dict calc {time0_4-time0_3}")
 
             # save dJ_dz for ahead for next back step
             dJ_dz_past = dJ_dz_ahead
@@ -404,7 +430,7 @@ class ChunkNN(SmoothNN):
             raise Exception("Given train chunk must be a valid train chunk (_train_chunk attribute set to True)")
 
         # validate structure
-        super()._val_structure
+        super()._val_structure()
 
         # get initial params
         super()._get_initial_params()
@@ -421,17 +447,22 @@ class ChunkNN(SmoothNN):
 
         for epoch in range(num_epochs):
             print(f"Epoch: {epoch}")
-            start_time = time.time()
+            time_0 = time.time()
             for X_train, y_train in train_chunk.generate():
+
+                time_1 = time.time()
+                #print(f"\n Time for data gen: {time_1-time_0}")
                 super()._batch_total_pass(X_train, y_train)
-                end_time = time.time()
-                print(end_time-start_time)
+                time_2 = time.time()
+                print(f"Time for batch pass {time_2 - time_1}")
+
                 if verbose:
                     if np.random.binomial(1, batch_prob):
                         sampled_batch_loss = super().avg_loss(X_train, y_train)
 
                         print(f"\t Sampled batch loss: {sampled_batch_loss}")
-                start_time = time.time()
+
+                time_0 = time.time()
 
             if param_path:
                 joblib.dump(self.params,param_path)
@@ -544,7 +575,7 @@ class SuperChunkNN(SmoothNN):
                         sampled_batch_loss = super().avg_loss(X_train, y_train)
 
                         print(f"\t Sampled batch loss: {sampled_batch_loss}")
-                        
+
                 start_time = time.time()
                 
             if param_path:
