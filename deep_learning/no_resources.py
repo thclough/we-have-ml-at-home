@@ -1,3 +1,5 @@
+import os
+import tempfile
 import numpy as np
 import csv
 import gzip
@@ -6,16 +8,62 @@ import time
 import warnings
 import traceback
 import utils
+import random
 from contextlib import ExitStack
 
 #TODO
 ## __iter__ and __next__ for generate
 ## apply one hot encoding for y_data just to OHA
-## optimizing chunk size based on operations (but would have to peek at operations)
-
-## "like" arg, np.loadtxt __array_function__ protocol for oha?
 
 ## can put one hot labels in txt
+
+
+# shuffle based on https://towardsdatascience.com/randomizing-very-large-datasets-e2b14e507725
+def shuffle_in_memory(source, output, header_bool=False):
+    """Shuffle lines from a file """
+    with open(source) as sf:
+        if header_bool:
+            header = sf.readline()
+        lines = sf.readlines()
+
+    random.shuffle(lines)
+
+    with open(output, "w") as of:
+        if header_bool:
+            of.write(header)
+        of.writelines(lines)
+
+def merge_files(temp_files, output, header=None):
+    with open(output, "w") as of:    
+        if header:
+            of.write(header)
+        for temp_file in temp_files:
+            with open(temp_file.name) as tf:
+                line = tf.readline()
+                while line:
+                    of.write(line)
+                    line = tf.readline()
+            
+def shuffle(source, output, memory_limit, file_split_count=10, header_bool=False):
+    header = None
+    if os.path.getsize(source) < memory_limit:
+        shuffle_in_memory(source, output, header_bool)
+    else:
+        with ExitStack() as stack:
+            temp_files = [stack.enter_context(tempfile.NamedTemporaryFile("w+", delete=False)) for i in range(file_split_count)]
+    
+            sf = stack.enter_context(open(source))
+
+            if header_bool:
+                header = sf.readline()
+            for line in sf: 
+                random_file_idx = random.randint(0, len(temp_files) - 1)
+                temp_files[random_file_idx].write(line)
+        
+        for temp_file in temp_files:
+            shuffle(temp_file.name, temp_file.name, memory_limit, file_split_count, header_bool=False)
+
+        merge_files(temp_files, output, header)
 
 def chop_up_csv(source_path, split_dict, header=True, seed=100):
     """Section given data source into different sets, 
