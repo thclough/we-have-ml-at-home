@@ -20,7 +20,13 @@ from contextlib import ExitStack
 
 # shuffle based on https://towardsdatascience.com/randomizing-very-large-datasets-e2b14e507725
 def shuffle_in_memory(source, output, header_bool=False):
-    """Shuffle lines from a file """
+    """Shuffle lines from a file in memory
+    
+    Args:
+        source (file-like) : file-like source whose lines need to be shuffled
+        output (file-like) : destination to write to
+        header_bool (bool, default=False) : whether or not source file has header
+    """
     with open(source) as sf:
         if header_bool:
             header = sf.readline()
@@ -34,6 +40,14 @@ def shuffle_in_memory(source, output, header_bool=False):
         of.writelines(lines)
 
 def merge_files(temp_files, output, header=None):
+    """Merge temp file lines into output file
+    
+    Args:
+        temp_files (array) : array of temp_files to merge
+        output (file-like) : destination to write temp_files to
+        header (str, default=None) : header to include in output
+    """
+
     with open(output, "w") as of:    
         if header:
             of.write(header)
@@ -45,6 +59,16 @@ def merge_files(temp_files, output, header=None):
                     line = tf.readline()
             
 def shuffle(source, output, memory_limit, file_split_count=10, header_bool=False):
+    """Shuffle lines from large source file into output file without reading the entire source file into memory
+
+    Args:
+        source (file-like) : file-like source whose lines need to be shuffled
+        output (file-like) : destination to write to
+        memory_limit (int) : byte limit to shuffle in memory
+        file_split_count (int, default=10) : number of temp files to create, relates to recursion depth
+        header_bool (bool, default=False) : whether or not source file has header
+    """
+
     header = None
     if os.path.getsize(source) < memory_limit:
         shuffle_in_memory(source, output, header_bool)
