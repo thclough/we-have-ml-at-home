@@ -173,7 +173,7 @@ class SmoothNN:
         """
         n = len(X_train)
 
-        start_train_time = time.time()
+        #start_train_time = time.time()
         # go through the batches
         for start_idx in range(0,n-1,self.batch_size):
             end_idx = min(start_idx + self.batch_size, n)
@@ -185,23 +185,24 @@ class SmoothNN:
             # create batch_total_pass, just return this
             self._batch_total_pass(X_train_batch, y_train_batch)
 
-            cur_train_time = time.time()
+            # cur_train_time = time.time()
             #print(cur_train_time-start_train_time)
 
-            start_train_time = cur_train_time
+            #start_train_time = cur_train_time
 
     def _batch_total_pass(self, X_train_batch, y_train_batch):
         """forward propagation, backward propagation and parameter updates for """
-        time3 = time.time()
+        #time3 = time.time()
         # forward pass
         node_vals_batch = self._forward_prop(X_train_batch)
-        time4 = time.time()
+        # time4 = time.time()
         # print(f"Time for forward: {time4-time3}")
 
         # perform back prop to obtain gradients
         grad_dict = self._backward_prop(X_train_batch, y_train_batch, node_vals_batch)
-        time5 = time.time()
-        print(f"time for backwards {time5-time4}")
+        
+        #time5 = time.time()
+        #print(f"time for backwards {time5-time4}")
 
         # update params
         for param in self.params:
@@ -212,8 +213,9 @@ class SmoothNN:
                 (self.learning_rate * gradient).subtract_from_update(self.params[param])
             else:
                 self.params[param] = self.params[param] - (self.learning_rate * gradient)
-        time6 = time.time()
-        print(f"Time for params update {time6-time5}")
+        
+        #time6 = time.time()
+        #print(f"Time for params update {time6-time5}")
         
     def _forward_prop(self, X_train):
         """Perform forward pass in neural net while storing intermediaries. 
@@ -255,7 +257,6 @@ class SmoothNN:
             za_vals (dictionary) : dictionary of node precursors and activation values
                 where "an" or "an" would correspond to the nth layer indexed at 0 
         """
-        print("Enter Backprop")
         # get number of training examples
         n = len(X)
 
@@ -263,7 +264,7 @@ class SmoothNN:
         # go through the layers backwards
         for layer in range(self.num_layers-1,0,-1):
 
-            time0_1 = time.time()
+            #time0_1 = time.time()
             # get the node precursors (z's) and activation values
             a_behind = za_vals[f"a{layer-1}"]
             a_ahead = za_vals[f"a{layer}"]
@@ -280,7 +281,7 @@ class SmoothNN:
                 da_dz_ahead = activation.backward(z_ahead)
                 dJ_dz_ahead = dJ_da_ahead * da_dz_ahead
 
-            time0_3 = time.time()
+            #time0_3 = time.time()
 
             # cases for efficiency, for regularization, operating on large W matrix (even with reg strength of 0)
             # can be very time expensive
@@ -291,14 +292,17 @@ class SmoothNN:
 
             grad_dict[f"b{layer}"] = dJ_dz_ahead.mean(axis=0)
 
-            time0_4 = time.time()
-            print(f"Time for grad dict calc {time0_4-time0_3}")
+            #time0_4 = time.time()
+            #print(f"Time for grad dict calc {time0_4-time0_3}")
 
             # save dJ_dz for ahead for next back step
             dJ_dz_past = dJ_dz_ahead
             W_ahead = W
 
         return grad_dict
+    
+    def load_params(self, path):
+        self.params = joblib.load(path)
     
     def predict_prob(self, X):
         """Obtain output layer activations
@@ -450,11 +454,11 @@ class ChunkNN(SmoothNN):
             time_0 = time.time()
             for X_train, y_train in train_chunk.generate():
 
-                time_1 = time.time()
+                #time_1 = time.time()
                 #print(f"\n Time for data gen: {time_1-time_0}")
                 super()._batch_total_pass(X_train, y_train)
-                time_2 = time.time()
-                print(f"Time for batch pass {time_2 - time_1}")
+                #time_2 = time.time()
+                #print(f"Time for batch pass {time_2 - time_1}")
 
                 if verbose:
                     if np.random.binomial(1, batch_prob):
@@ -462,7 +466,7 @@ class ChunkNN(SmoothNN):
 
                         print(f"\t Sampled batch loss: {sampled_batch_loss}")
 
-                time_0 = time.time()
+                #time_0 = time.time()
 
             if param_path:
                 joblib.dump(self.params,param_path)
@@ -562,21 +566,24 @@ class SuperChunkNN(SmoothNN):
             ax.set_ylabel("Average Loss")
 
         for epoch in range(num_epochs):
-            print(f"epoch: {epoch}")
-            start_time = time.time()
+            print(f"Epoch: {epoch}")
+            # tart_time = time.time()
+
             for data in self.super_chunk.generate():
                 X_train, y_train, _, _, _, _ = data
 
                 super()._batch_total_pass(X_train, y_train)
-                end_time = time.time()
-                print(f"{end_time-start_time}")
+
+                # end_time = time.time()
+                # print(f"Time for loop {end_time-start_time}")
+
                 if verbose:
                     if np.random.binomial(1, batch_prob):
                         sampled_batch_loss = super().avg_loss(X_train, y_train)
 
                         print(f"\t Sampled batch loss: {sampled_batch_loss}")
 
-                start_time = time.time()
+                # start_time = time.time()
                 
             if param_path:
                 joblib.dump(self.params,param_path)
@@ -597,8 +604,6 @@ class SuperChunkNN(SmoothNN):
                     true_epoch = epoch + 1
                     super()._update_epoch_plot(fig, ax, true_epoch, num_epochs, epoch_gap)
                     
-            
-
     def get_td_costs(self):
 
         train_loss_sum = 0
@@ -631,6 +636,68 @@ class SuperChunkNN(SmoothNN):
             dev_cost = None
 
         return train_cost, dev_cost
+
+    def tdt_report(self):
+        """Create train, dev, and test set classification matrices. 
+        True labels along 0 axis and predicted labels along 1st axis
+
+        Returns:
+            sorted_labels_key (dict) : {label value : idx} dictionary key for matrices
+            reports (3-tuple of numpy arrays) : train report, dev report, and test report arrays
+        
+        """
+        # create coord dictionary to keep track of ground truth and predicted labels
+        train_report_dict = {}
+        dev_report_dict = {}
+        test_report_dict = {}
+
+        # to collect unique labels
+        labels = set()
+
+        for data in self.super_chunk.generate():
+            X_train, y_train, X_dev, y_dev, X_test, y_test = data
+
+            # calculate activation values for each layer (includes predicted values)
+            y_pred_train = super().predict_labels(X_train)
+            y_pred_dev = super().predict_labels(X_dev)
+            y_pred_test = super().predict_labels(X_test)
+
+            if self.loss != node_funcs.BCE:
+                y_train = np.argmax(y_train,axis=1)
+                y_dev = np.argmax(y_dev,axis=1)
+                y_test = np.argmax(y_test,axis=1)
+
+            set_args = [(train_report_dict, y_train, y_pred_train),
+                        (dev_report_dict, y_dev, y_pred_dev),
+                        (test_report_dict, y_test, y_pred_test)]
+
+            for report_dict, true_labels, pred_labels in set_args:
+                for true_label, pred_label in zip(true_labels, pred_labels):
+                    report_dict[(true_label, pred_label)] = report_dict.get((true_label, pred_label), 0) + 1
+                    
+                    # add label to label set
+                    labels.add(true_label)
+                    labels.add(pred_label)
+
+        num_labels = len(labels)
+        sorted_labels = sorted(list(labels))
+        sorted_labels_key = {label: idx for idx,label in enumerate(sorted_labels)}
+
+        reports = []
+
+        # create the reports
+        for report_dict, _, _ in set_args:
+            report = np.zeros((num_labels, num_labels), dtype=int)
+            for true_label, pred_label in report_dict:
+                pair_count = report_dict[(true_label, pred_label)]
+                report_idx = (sorted_labels_key[true_label], sorted_labels_key[pred_label])
+
+                report[report_idx] = pair_count
+
+            reports.append(report)
+
+        return sorted_labels_key, reports
+            
             
     def accuracy(self):
         """Evaluate accuracy efficiently

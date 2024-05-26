@@ -244,7 +244,7 @@ class Chunk:
 
         self.set_input_dim()
 
-        self._standardize=standardize
+        self._standardize = standardize
         
         # calculate mean and standard deviation of training data if standardizing
         if self._standardize and self._train_chunk:
