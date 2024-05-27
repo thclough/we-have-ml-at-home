@@ -534,6 +534,7 @@ class SuperChunkNN(SmoothNN):
             epoch_gap=5,
             batch_prob=.01,
             param_path=None,
+            display_path=None,
             verbose=True, 
             display=True):
         """Feeds data from chunk generator into model for training
@@ -603,7 +604,10 @@ class SuperChunkNN(SmoothNN):
                 if display:
                     true_epoch = epoch + 1
                     super()._update_epoch_plot(fig, ax, true_epoch, num_epochs, epoch_gap)
-                    
+        
+        if display and display_path:
+            fig.savefig(display_path)
+            
     def get_td_costs(self):
 
         train_loss_sum = 0
@@ -644,7 +648,6 @@ class SuperChunkNN(SmoothNN):
         Returns:
             sorted_labels_key (dict) : {label value : idx} dictionary key for matrices
             reports (3-tuple of numpy arrays) : train report, dev report, and test report arrays
-        
         """
         # create coord dictionary to keep track of ground truth and predicted labels
         train_report_dict = {}
