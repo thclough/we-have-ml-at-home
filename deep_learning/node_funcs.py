@@ -144,6 +144,7 @@ class BCE:
         Returns:
             (vector) : binary cross entropy loss
         """
+        y_pred = np.clip(y_pred, 1e-15, 1 - 1e-15)
         return -(y_true * np.log(y_pred) + (1-y_true) * np.log(1-y_pred))
     
     @staticmethod
@@ -163,24 +164,23 @@ class WeightedBCE(BCE):
     """For imbalanced dataset"""
     name = "Weighted Binary Cross Entropy"
     
-    def __init__(self, prop_neg):
+    def __init__(self, prop_pos):
         """
         Args:
-            prop_neg (float) : proportion of examples that are negative
+            prop_pos (float) : proportion of examples that are positive
         """
-        self._weight_neg = .5 / prop_neg
-        self._weight_pos = .5 / (1-prop_neg)
+        self._weight_pos = (1-prop_pos) / prop_pos
 
     def forward(self, y_pred, y_true):
         """
         Args:
-            y_pred (vector): output probabilities
-            y_true (vector): ground truth labels
+            y_pred (vector) : output probabilities
+            y_true (vector) : ground truth labels
 
         Returns:
             (vector) : binary cross entropy
         """
-        weight_vector = self._weight_pos * y_true + self._weight_neg * (1-y_true)
+        weight_vector = self._get_weight_vector(y_true)
         return weight_vector * super().forward(y_pred, y_true)
 
     def backward(self, y_pred, y_true):
@@ -193,7 +193,7 @@ class WeightedBCE(BCE):
         Returns:
             (vector) : Jacobian wrt linear combination
         """
-        weight_vector = self._weight_pos * y_true + self._weight_neg * (1-y_true)
+        weight_vector = self._get_weight_vector(y_true)
         return weight_vector * super().backward(y_pred, y_true)
     
     def _get_weight_vector(self, y_true):
@@ -205,7 +205,7 @@ class WeightedBCE(BCE):
         Returns:
             (vector) : weight vector with same dimensions as y_true
         """
-        return self._weight_pos * y_true + self._weight_neg * (1-y_true)
+        return self._weight_pos * y_true + (1-y_true)
 
 class CE:
     name = "Cross Entropy"

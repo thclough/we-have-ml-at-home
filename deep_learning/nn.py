@@ -1,14 +1,13 @@
 import numpy as np
 import matplotlib.pyplot as plt
-#from we_have_ml_at_home.deep_learning import node_funcs
-import node_funcs
+from . import node_funcs
 import time
 import joblib
-import no_resources
+from . import no_resources
 
 # TODO
-## Superchunk epoch costs and display
-## Weighting BCE and derivative for imbalanced dataset
+
+## isinstance BCE
 ## Estimating time to completion 
 
 ## different types of regularization
@@ -20,6 +19,7 @@ class SmoothNN:
     def __init__(self):
         # layers list 
         self.layers = []
+        self.params = {}
         self.num_layers = 0
         self.loss=None
 
@@ -154,8 +154,6 @@ class SmoothNN:
         W dimensions are (input layer size x output layer size)
         b is one dimensional the size (output layer size)
         """
-        self.params = {}
-
         for layer_idx in range(1,self.num_layers):
             input_size = self.layers[layer_idx - 1]["size"]
             output_size = self.layers[layer_idx]["size"]
@@ -420,6 +418,7 @@ class ChunkNN(SmoothNN):
             epoch_gap=5,
             batch_prob=.01,
             param_path=None,
+            display_path=None,
             verbose=True, 
             display=True):
         
@@ -436,8 +435,10 @@ class ChunkNN(SmoothNN):
         # validate structure
         super()._val_structure()
 
-        # get initial params
-        super()._get_initial_params()
+        # get initial params if none loaded
+        if not self.params:
+            print("WARNING: Creating new set of params")
+            super()._get_initial_params() 
 
         # initialize lists for costs
         self._train_costs = []
@@ -451,14 +452,17 @@ class ChunkNN(SmoothNN):
 
         for epoch in range(num_epochs):
             print(f"Epoch: {epoch}")
-            time_0 = time.time()
+            epoch_start_time = time.time()
+            #start_time = time.time()
+
+            np.random.seed(100)
+
             for X_train, y_train in train_chunk.generate():
 
-                #time_1 = time.time()
-                #print(f"\n Time for data gen: {time_1-time_0}")
                 super()._batch_total_pass(X_train, y_train)
-                #time_2 = time.time()
-                #print(f"Time for batch pass {time_2 - time_1}")
+
+                # end_time = time.time()
+                # print(f"Time for loop {end_time-start_time}")
 
                 if verbose:
                     if np.random.binomial(1, batch_prob):
@@ -466,13 +470,18 @@ class ChunkNN(SmoothNN):
 
                         print(f"\t Sampled batch loss: {sampled_batch_loss}")
 
-                #time_0 = time.time()
+                # start_time = time.time()
+            epoch_end_time = time.time()
+
+            print(f"Epoch completion time: {(epoch_end_time-epoch_start_time) / 3600} Hours")
 
             if param_path:
                 joblib.dump(self.params,param_path)
 
             # record costs after each epoch gap
             if epoch % epoch_gap == 0:
+                gap_start_time = time.time()
+
                 epoch_train_cost = self.chunk_loss(train_chunk)
                 self._train_costs.append(epoch_train_cost)
                 if verbose:
@@ -487,6 +496,13 @@ class ChunkNN(SmoothNN):
                 if display:
                     true_epoch = epoch + 1
                     super()._update_epoch_plot(fig, ax, true_epoch, num_epochs, epoch_gap)
+
+                gap_end_time = time.time()
+
+                print(f"Gap completion time: {(gap_end_time-gap_start_time) / 3600} Hours")
+        
+        if display and display_path:
+            fig.savefig(display_path)
                 
     def chunk_loss(self, eval_chunk):
         """"Calculate loss on the eval chunk"""
@@ -513,7 +529,7 @@ class ChunkNN(SmoothNN):
         for X_eval, y_eval in eval_chunk.generate():
             y_pred = super().predict_labels(X_eval)
 
-            if self.loss != node_funcs.BCE:
+            if not isinstance(self.loss, node_funcs.BCE):
                 y_eval = np.argmax(y_eval, axis=1)
 
             eval_right_sum += (y_pred == y_eval).sum()
@@ -522,6 +538,52 @@ class ChunkNN(SmoothNN):
         accuracy = eval_right_sum / eval_len_sum
 
         return accuracy
+    
+    def chunk_report(self, eval_chunk):
+        """Create classification matrix for the given chunk.
+        
+        Args:
+            eval_chunk (Chunk) : chunk to generate classification matrix for. 
+                True labels along 0 axis and predicted labels along 1st axis.
+        Returns:
+            sorted_labels_key (dict) : {label value : idx} dictionary key for matrices
+            report (numpy array) : classification matrix for the chunk
+        """
+        # hold classification matrix coordinates (true label, predicted label) -> count
+        report_dict = {}
+
+        # separate report dict and labels in case labels are not 0 indexes
+        labels = set()
+
+        for X_eval, y_eval in eval_chunk.generate():
+
+            y_pred_eval = super().predict_labels(X_eval)
+
+            if not isinstance(self.loss, node_funcs.BCE):
+                y_eval = np.argmax(y_eval, axis=1)
+
+            for true_label, pred_label in zip(y_eval, y_pred_eval):
+                true_label = int(true_label)
+                pred_label = int(pred_label)
+                report_dict[(true_label, pred_label)] = report_dict.get((true_label, pred_label), 0) + 1
+
+                labels.add(true_label)
+                labels.add(pred_label)
+        
+        num_labels = len(labels)
+        sorted_labels = sorted(list(labels))
+        sorted_labels_key = {label: idx for idx, label in enumerate(sorted_labels)}
+        
+        report = np.zeros((num_labels, num_labels))
+
+        for true_label, pred_label in report_dict:
+            pair_count = report_dict[(true_label, pred_label)]
+            report_idx = (sorted_labels_key[true_label], sorted_labels_key[pred_label])
+
+            report[report_idx] = pair_count
+
+        return sorted_labels_key, report
+
 
 class SuperChunkNN(SmoothNN):
     """NN class for SuperChunk iterator for large datasets
@@ -553,8 +615,10 @@ class SuperChunkNN(SmoothNN):
         # validate inputs
         super()._val_structure
 
-        # get initial params
-        super()._get_initial_params() 
+        # get initial params if none loaded
+        if not self.params:
+            print("WARNING: Creating new set of params")
+            super()._get_initial_params() 
 
         # initialize lists for costs
         self._train_costs = []
@@ -568,15 +632,16 @@ class SuperChunkNN(SmoothNN):
 
         for epoch in range(num_epochs):
             print(f"Epoch: {epoch}")
-            # tart_time = time.time()
+            epoch_start_time = time.time()
+            start_time = time.time()
 
             for data in self.super_chunk.generate():
                 X_train, y_train, _, _, _, _ = data
 
                 super()._batch_total_pass(X_train, y_train)
 
-                # end_time = time.time()
-                # print(f"Time for loop {end_time-start_time}")
+                end_time = time.time()
+                print(f"Time for loop {end_time-start_time}")
 
                 if verbose:
                     if np.random.binomial(1, batch_prob):
@@ -584,13 +649,18 @@ class SuperChunkNN(SmoothNN):
 
                         print(f"\t Sampled batch loss: {sampled_batch_loss}")
 
-                # start_time = time.time()
-                
+                start_time = time.time()
+            epoch_end_time = time.time()
+
+            print(f"Epoch completion time: {(epoch_end_time-epoch_start_time) / 3600} Hours")
+
             if param_path:
                 joblib.dump(self.params,param_path)
 
             # record costs after each epoch gap
             if epoch % epoch_gap == 0:
+                gap_start_time = time.time()
+
                 epoch_train_cost, epoch_dev_cost = self.get_td_costs()
                 self._train_costs.append(epoch_train_cost)
                 if verbose:
@@ -604,7 +674,11 @@ class SuperChunkNN(SmoothNN):
                 if display:
                     true_epoch = epoch + 1
                     super()._update_epoch_plot(fig, ax, true_epoch, num_epochs, epoch_gap)
-        
+
+                gap_end_time = time.time()
+
+                print(f"Gap completion time: {(gap_end_time-gap_start_time) / 3600} Hours")
+
         if display and display_path:
             fig.savefig(display_path)
             
@@ -643,10 +717,11 @@ class SuperChunkNN(SmoothNN):
 
     def tdt_report(self):
         """Create train, dev, and test set classification matrices. 
-        True labels along 0 axis and predicted labels along 1st axis
+       
 
         Returns:
             sorted_labels_key (dict) : {label value : idx} dictionary key for matrices
+                True labels along 0 axis and predicted labels along 1st axis
             reports (3-tuple of numpy arrays) : train report, dev report, and test report arrays
         """
         # create coord dictionary to keep track of ground truth and predicted labels
@@ -654,7 +729,8 @@ class SuperChunkNN(SmoothNN):
         dev_report_dict = {}
         test_report_dict = {}
 
-        # to collect unique labels
+        # to collect unique labels, 
+        # separate report dict and labels in case labels are not 0 indexes
         labels = set()
 
         for data in self.super_chunk.generate():
@@ -664,8 +740,8 @@ class SuperChunkNN(SmoothNN):
             y_pred_train = super().predict_labels(X_train)
             y_pred_dev = super().predict_labels(X_dev)
             y_pred_test = super().predict_labels(X_test)
-
-            if self.loss != node_funcs.BCE:
+            
+            if not isinstance(self.loss, node_funcs.BCE):
                 y_train = np.argmax(y_train,axis=1)
                 y_dev = np.argmax(y_dev,axis=1)
                 y_test = np.argmax(y_test,axis=1)
@@ -676,12 +752,14 @@ class SuperChunkNN(SmoothNN):
 
             for report_dict, true_labels, pred_labels in set_args:
                 for true_label, pred_label in zip(true_labels, pred_labels):
+                    true_label = int(true_label)
+                    pred_label = int(pred_label)
                     report_dict[(true_label, pred_label)] = report_dict.get((true_label, pred_label), 0) + 1
-                    
+
                     # add label to label set
                     labels.add(true_label)
                     labels.add(pred_label)
-
+        
         num_labels = len(labels)
         sorted_labels = sorted(list(labels))
         sorted_labels_key = {label: idx for idx,label in enumerate(sorted_labels)}
@@ -700,7 +778,6 @@ class SuperChunkNN(SmoothNN):
             reports.append(report)
 
         return sorted_labels_key, reports
-            
             
     def accuracy(self):
         """Evaluate accuracy efficiently
@@ -728,7 +805,7 @@ class SuperChunkNN(SmoothNN):
             y_pred_dev = super().predict_labels(X_dev)
             y_pred_test = super().predict_labels(X_test)
 
-            if self.loss != node_funcs.BCE:
+            if not isinstance(self.loss, node_funcs.BCE):
                 y_train = np.argmax(y_train,axis=1)
                 y_dev = np.argmax(y_dev,axis=1)
                 y_test = np.argmax(y_test,axis=1)

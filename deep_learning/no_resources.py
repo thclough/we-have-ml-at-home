@@ -7,13 +7,17 @@ import re
 import time
 import warnings
 import traceback
-import utils
+from . import utils
 import random
 from contextlib import ExitStack
 
 #TODO
+## automatically create jar openers for setting input
+## chunk sizes mean batch sizes for chunk nn, but chunk_size * train_prop = batch size for super chunk
 ## __iter__ and __next__ for generate
 ## apply one hot encoding for y_data just to OHA
+
+
 
 ## can put one hot labels in txt
 
