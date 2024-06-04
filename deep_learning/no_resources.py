@@ -13,9 +13,18 @@ from contextlib import ExitStack
 
 #TODO
 ## automatically create jar openers for setting input
+## option for generating ints or floats (maybe in set data input and output)
 ## chunk sizes mean batch sizes for chunk nn, but chunk_size * train_prop = batch size for super chunk
+## oha dict allows for double indexing
 ## __iter__ and __next__ for generate
 ## apply one hot encoding for y_data just to OHA
+## file extensions for jar should not come from name, but from actual file attributes
+
+
+# COMPLETED
+
+
+# REJECTED
 
 
 
@@ -223,11 +232,11 @@ class Chunk:
         self._input_flag = False
         self._output_flag = False
 
-    def set_data_input_props(self, input_jar, data_selector=np.s_[:], skiprows=0, sparse_dim=None, standardize=False):
+    def set_data_input_props(self, input_path, data_selector=np.s_[:], skiprows=0, sparse_dim=None, standardize=False):
         """Set the data/input properties for the chunk object
         
         Args:
-            input_jar (str) : jar opener for input data
+            input_path (str) : path for input data
             data_selector (IndexExpression, default=np.s_[:]) : 1D index expression to select certain columns, if none specified will select all columns
             skiprows (int, default=0) : number of rows to skip
             sparse_dim (int, default=None) : dimensions of the sparse vectors, if applicable
@@ -237,7 +246,7 @@ class Chunk:
         self._input_flag=True
 
         # get the opener function
-        self._input_jar = input_jar
+        self._input_jar = JarOpener(input_path)
 
         # select all columns if no data columns
         self._data_input_selector = data_selector
@@ -288,11 +297,11 @@ class Chunk:
 
         self._num_data_lines = data_lines
 
-    def set_data_output_props(self, output_jar, data_selector=np.s_[:], skiprows=0, one_hot_width=None):
+    def set_data_output_props(self, output_path, data_selector=np.s_[:], skiprows=0, one_hot_width=None):
         """Set the label properties for the chunk object
         
         Args:
-            output_jar (JarOpener) : jar opener for output data
+            output_path (str) : path for output data
             data_selector (IndexExpression, default=np.s_[:]) : 1D index expression to select certain columns, if none specified will select all columns
             skiprows (int, default=0) : number of rows to skip
             one_hot_width (list, default=None) : number of categories for one hot encoding
@@ -301,7 +310,7 @@ class Chunk:
         self._output_flag = True
 
         # get the opener function
-        self._output_jar = output_jar
+        self._output_jar = JarOpener(output_path)
 
         self._data_output_selector = data_selector
 
@@ -358,7 +367,7 @@ class Chunk:
             skiprows (int) : number or rows to skip
             data_selector (IndexExpression) : numpy index expression to select data from generated raw data
             ndmin (int, default=0) : The returned array will have at least ndmin dimensions. Otherwise mono-dimensional axes will be squeezed. 
-                sLegal values: 0 (default), 1 or 2.
+                Legal values: 0 (default), 1 or 2.
 
         Yields:
             data (numpy array) : data from jar opener of set chunk size
@@ -379,7 +388,7 @@ class Chunk:
             while True:
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore")
-                    data = np.loadtxt(data_file, delimiter=",", max_rows=self.chunk_size, ndmin=ndmin)
+                    data = np.loadtxt(data_file, delimiter=",", max_rows=self.chunk_size, ndmin=ndmin, dtype=int)
 
                 data_len = data.shape[0]
 
@@ -407,8 +416,7 @@ class Chunk:
 
             if self._standardize:
                 if self._train_chunk or self._linked_chunk:
-                    #X_data = (X_data - self._train_mean) / self._train_std
-                    X_data = (X_data - 33.318) / 78.567
+                    X_data = (X_data - self._train_mean) / self._train_std
 
             yield X_data, y_data
 
@@ -477,21 +485,24 @@ class Chunk:
 
         self._train_std = np.sqrt(sum_dev_sqd / train_count)
 
-    def create_linked_chunk(self, input_jar, output_jar):
+    def create_linked_chunk(self, input_path, output_path):
         """Create a chunk linked to the instance train chunk, ex. a dev or test chunk
         
         Args:
-            input_jar (JarOpener) : jar opener for input data
+            input_path (str) : path for input data
+            output_path (str) : path for output data
         Returns:
-            output_jar (JarOpener) : jar opener for output data
+            
         """
+        input_jar = JarOpener(input_path)
+        output_jar =  JarOpener(output_path)
         self.val_create_linked_chunk(input_jar, output_jar)
 
         linked_chunk = Chunk(chunk_size=self.chunk_size, train_chunk=False)
         linked_chunk._linked_chunk = True
 
         # set data and properties
-        linked_chunk.set_data_input_props(input_jar=input_jar,
+        linked_chunk.set_data_input_props(input_path=input_path,
                                           data_selector=self._data_input_selector, 
                                           skiprows=self._input_skiprows, 
                                           sparse_dim=self._sparse_dim, 
@@ -502,7 +513,7 @@ class Chunk:
         if self._standardize:
             linked_chunk._train_mean = self._train_mean
             linked_chunk._train_std = self._train_std
-        linked_chunk.set_data_output_props(output_jar=output_jar,
+        linked_chunk.set_data_output_props(output_path=output_path,
                                            data_selector=self._data_output_selector,
                                            skiprows=self._output_skiprows,
                                            one_hot_width=self.one_hot_width)
@@ -1030,7 +1041,7 @@ class OneHotArray:
         # instantiate cand_idx_rel dict to hold sparse array
         cand_idx_rel = {}
 
-        if isinstance(idx_array, (np.ndarray, list)) != None and oha_dict == None:
+        if isinstance(idx_array, (np.ndarray, list)) and oha_dict == None:
             if self.shape[0] < len(idx_array):
                 raise Exception("Number of row vectors in array must be greater than amount given")
             for row_idx, col_idxs in enumerate(idx_array):

@@ -9,6 +9,7 @@ from . import no_resources
 
 ## isinstance BCE
 ## Estimating time to completion 
+## loss is 1 example, cost is average loss
 
 ## different types of regularization
 ## different types of loss
@@ -20,7 +21,12 @@ class SmoothNN:
         # layers list 
         self.layers = []
         self.params = {}
+        self._learning_rates = []
+        self._reg_strengths = []
+        self._batch_sizes = []
+        self._has_fit = False
         self.num_layers = 0
+        self._loaded_model=False
         self.loss=None
 
     def add_layer(self, layer_size, activation=None, loss=None):
@@ -61,13 +67,66 @@ class SmoothNN:
         # declare loss for the loss function
         self.loss = loss
 
+    def _set_dev_flag(self, X_dev, y_dev):
+        self._dev_flag = False
+        if (X_dev is not None) or (y_dev is not None):
+            if not (X_dev is not None and y_dev is not None):
+                raise Exception("Please input both X_dev and y_dev if using a dev set")
+            else:
+                self._dev_flag = True
+
     def fit(self, 
             X_train, y_train, 
             X_dev=None, y_dev=None,
-            batch_size=None, 
+            batch_size=None,
             learning_rate=1, 
             reg_strength=0.0001,
             num_epochs=30,
+            verbose=True,
+            display=True):
+        """Fits the neural network to the data for the first time"""
+        
+        # validate inputs def validate_structure
+        self._val_structure()
+
+        # clear data for the first fit
+
+        self._has_fit = True
+        self._epoch = 0
+        self._train_costs = []
+        self._dev_costs = []
+        self._learning_rates = []
+        self._reg_strengths = []
+        self._batch_sizes = []
+        self._train_collection = None
+        self._dev_collection = None
+
+        n_train,_ = X_train.shape
+
+        # set batch size to the size of the whole training set if none passed
+        if batch_size is None:
+            self.batch_size = n_train
+
+        self._set_dev_flag(X_dev, y_dev)
+
+        # get the initial weights and biases
+        if verbose:
+            print("WARNING: Creating new set of params")
+        self._get_initial_params() 
+
+        self.refine(X_train=X_train,
+                    y_train=y_train,
+                    X_dev=X_dev,
+                    y_dev=y_dev,
+                    batch_size=batch_size)
+
+    def refine(self, 
+            X_train, y_train, 
+            X_dev=None, y_dev=None,
+            batch_size=None,
+            learning_rate=None, 
+            reg_strength=None,
+            num_epochs=None,
             verbose=True,
             display=True):
         """Fits the neural network to the data.
@@ -84,35 +143,19 @@ class SmoothNN:
             verbose (bool, default = True) : whether or not to print training loss after each epoch
             display (bool, default = True) : whether or not to plot training (and dev) average loss after each epoch
         """
+        if not self._has_fit:
+            raise Exception("Please fit the model before refining")
 
-        # attributes
-        self.batch_size = batch_size
-        self.learning_rate = learning_rate
-        self.reg_strength = reg_strength
-        self._dev_flag = False # flag if there is a dev set
-
-        # validate inputs def validate_structure
-        self._val_structure()
-
-        if (X_dev is not None) or (y_dev is not None):
-            if not (X_dev is not None and y_dev is not None):
-                raise Exception("Please input both X_dev and y_dev")
-            else:
-                self._dev_flag = True
-
-        n_train,_ = X_train.shape
-
-        # set batch size to the size of the whole training set if none passed
-        if batch_size is None:
-            self.batch_size = n_train
-
-        # get the initial weights and biases
-        self._get_initial_params() # use current params
-
-        # initialize lists for costs
-        self._train_costs = []
-        self._dev_costs = []
+        # update attributes if needed
+        if batch_size:
+            self.batch_size = batch_size
+        if learning_rate:
+            self.learning_rate = learning_rate
+        if reg_strength:
+            self.reg_strength = reg_strength
         
+        self._set_dev_flag()
+
         # set up loss plot
         if display:
             fig, ax = plt.subplots()
@@ -120,21 +163,33 @@ class SmoothNN:
             ax.set_xlabel("Epoch")
             ax.set_ylabel("Average Loss")
 
+        end_epoch = self._epoch+num_epochs
+
         # go through the epochs
-        for epoch in range(num_epochs):
+        for epoch in range(self._epoch, end_epoch):
+
+            # update epoch data
+            self._learning_rates.append(self.learning_rate)
+            self._reg_strengths.append(self.reg_strength)
+            self._batch_sizes.append(self.batch_size)
+
             self._gradient_descent_epoch(X_train, y_train)
             # calculate avg loss for dev and test sets
+            
             self._train_costs.append(self.avg_loss(X_train, y_train))
             if self._dev_flag:
                 self._dev_costs.append(self.avg_loss(X_dev, y_dev))
+            else:
+                self._dev_costs.append(None)
 
             if verbose:
                 print(f"Training Avg Loss: {self._train_costs[-1]}")
                 
             if display:
                 # epoch in loop indexed at 0, add 1 to start indexing at 1
-                true_epoch = epoch+1
-                self._update_epoch_plot(fig, ax, true_epoch, num_epochs)
+                self._update_epoch_plot(fig, ax, epoch, end_epoch)
+
+            self._epoch += 1
 
     def _val_structure(self):
         """validate the structure of the the NN"""
@@ -158,7 +213,7 @@ class SmoothNN:
             input_size = self.layers[layer_idx - 1]["size"]
             output_size = self.layers[layer_idx]["size"]
             
-            self.params[f"W{layer_idx}"] = np.random.normal(size=(input_size, output_size))
+            self.params[f"W{layer_idx}"] = np.random.normal(size=(input_size, output_size)) * .01
             self.params[f"b{layer_idx}"] = np.zeros(shape=output_size)
 
     def _gradient_descent_epoch(self, X_train, y_train):
@@ -301,7 +356,18 @@ class SmoothNN:
     
     def load_params(self, path):
         self.params = joblib.load(path)
-    
+
+    def save_model(self, path):
+        joblib.dump(self, path)
+
+    @classmethod
+    def load_model(cls, path):
+        potential_model = joblib.load(path)
+        if type(potential_model) != cls:
+            raise Exception("New model must be of the type called")
+        potential_model._loaded_model = True
+        return potential_model
+
     def predict_prob(self, X):
         """Obtain output layer activations
         
@@ -344,7 +410,12 @@ class SmoothNN:
         # return avg of the losses
         return np.mean(self.loss.forward(y_pred, y))
 
-    def _update_epoch_plot(self, fig, ax, epoch, num_epochs, epoch_gap=1):
+    @staticmethod
+    def _update_scatter(collection, new_x, new_y):
+        offsets = np.c_[new_x, new_y]
+        collection.set_offsets(offsets)
+
+    def _update_epoch_plot(self, fig, ax, epoch, num_epochs):
         """Updates training plot to display average losses
 
         Args:
@@ -353,15 +424,18 @@ class SmoothNN:
             epoch (int) : epoch number to graph new data for
             num_epochs (int) : total number of epochs
         """
-        if epoch == 1:
-            self.train_line, = ax.plot(range(1,2), self._train_costs, label="Average training loss")
-            if self._dev_flag:
-                self.dev_line, = ax.plot(range(1, 2), self._dev_costs, label="Average dev loss")
+        if not self._train_collection:
+            self._train_collection = ax.scatter(range(0,epoch+1), self._train_costs, c="black", label="Average training loss")
             ax.legend()
         else:
-            self.train_line.set_data(range(1,epoch+1, epoch_gap), self._train_costs)
-            if self._dev_flag:
-                self.dev_line.set_data(range(1,epoch+1, epoch_gap), self._dev_costs)
+            self._update_scatter(self._train_collection, range(0,epoch+1), self._train_costs)
+
+        if self._dev_flag:
+            if not self._dev_collection:
+                self._dev_collection, = ax.scatter(range(0,epoch+1), self._dev_costs, c="grey", label="Average dev loss")
+                ax.legend()
+            else:
+                self._update_scatter(self._dev_collection, range(0,epoch+1), self._dev_costs)
 
         max_val = np.max(np.concatenate([self._dev_costs, self._train_costs]))
         ax.set(xlim=[0,num_epochs], ylim=[min(0, max_val*2),max(0, max_val*2)])
@@ -380,7 +454,7 @@ class SmoothNN:
         # calculate activation values for each layer (includes predicted values)
         final_activations = self.predict_prob(X)
 
-        if self.loss == node_funcs.BCE:
+        if isinstance(self.loss, node_funcs.BCE):
             predictions = final_activations > .5
         else:
             predictions = np.argmax(final_activations, axis=1)
@@ -451,6 +525,10 @@ class ChunkNN(SmoothNN):
             ax.set_ylabel("Average Loss")
 
         for epoch in range(num_epochs):
+
+            self._learning_rates.append(self.learning_rate)
+            self._reg_strengths.append(self.reg_strength)
+
             print(f"Epoch: {epoch}")
             epoch_start_time = time.time()
             #start_time = time.time()
@@ -574,7 +652,7 @@ class ChunkNN(SmoothNN):
         sorted_labels = sorted(list(labels))
         sorted_labels_key = {label: idx for idx, label in enumerate(sorted_labels)}
         
-        report = np.zeros((num_labels, num_labels))
+        report = np.zeros((num_labels, num_labels), dtype=int)
 
         for true_label, pred_label in report_dict:
             pair_count = report_dict[(true_label, pred_label)]
@@ -631,17 +709,21 @@ class SuperChunkNN(SmoothNN):
             ax.set_ylabel("Average Loss")
 
         for epoch in range(num_epochs):
+
+            self._learning_rates.append(self.learning_rate)
+            self._reg_strengths.append(self.reg_strength)
+
             print(f"Epoch: {epoch}")
             epoch_start_time = time.time()
-            start_time = time.time()
+            #start_time = time.time()
 
             for data in self.super_chunk.generate():
                 X_train, y_train, _, _, _, _ = data
 
                 super()._batch_total_pass(X_train, y_train)
 
-                end_time = time.time()
-                print(f"Time for loop {end_time-start_time}")
+                #end_time = time.time()
+                #print(f"Time for loop {end_time-start_time}")
 
                 if verbose:
                     if np.random.binomial(1, batch_prob):
@@ -649,7 +731,7 @@ class SuperChunkNN(SmoothNN):
 
                         print(f"\t Sampled batch loss: {sampled_batch_loss}")
 
-                start_time = time.time()
+                #start_time = time.time()
             epoch_end_time = time.time()
 
             print(f"Epoch completion time: {(epoch_end_time-epoch_start_time) / 3600} Hours")
