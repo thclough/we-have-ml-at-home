@@ -90,7 +90,6 @@ class SmoothNN:
         self._val_structure()
 
         # clear data for the first fit
-
         self._has_fit = True
         self._epoch = 0
         self._train_costs = []
@@ -573,11 +572,14 @@ class ChunkNN(SmoothNN):
 
                 if display:
                     true_epoch = epoch + 1
-                    super()._update_epoch_plot(fig, ax, true_epoch, num_epochs, epoch_gap)
+                    super()._update_epoch_plot(fig, ax, true_epoch, num_epochs)
 
                 gap_end_time = time.time()
 
                 print(f"Gap completion time: {(gap_end_time-gap_start_time) / 3600} Hours")
+            else:
+                self._train_costs.append(None)
+                self._dev_costs.append(None)
         
         if display and display_path:
             fig.savefig(display_path)
