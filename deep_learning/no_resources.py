@@ -172,19 +172,11 @@ class JarOpener:
             source_path (str) : file path string
 
         Returns:
-            (str) The file extension 
+            file_extension (str) : The file extension 
         """
-        # Define the regex pattern to match the file extension
-        pattern = r'\.(.+)$'
+        _, file_extension = os.path.splitext(source_path)
+        return file_extension
         
-        # Use re.search to find the pattern in the file path
-        match = re.search(pattern, source_path)
-        
-        # If a match is found, return the matched file extension
-        if match:
-            return match.group(1)
-        else:
-            return None  # Return None if no extension is found
 
     def get_opener_attrs(self, source_path):
         """Return the correct open function for the file extension
@@ -198,10 +190,10 @@ class JarOpener:
         """
         file_extension = self.get_file_extension(source_path)
 
-        if file_extension == "csv":
+        if file_extension == ".csv":
             opener = open
             opener_kwargs = {"file": source_path, "mode": "r", "encoding": None}
-        elif file_extension == "csv.gz":
+        elif file_extension == ".gz":
             opener = gzip.open
             opener_kwargs =  {"filename": source_path, "mode": "rt", "encoding":"utf-8"}
         else:

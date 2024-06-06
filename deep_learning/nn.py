@@ -168,11 +168,11 @@ class SmoothNN:
         self._rounds.append(self._epoch)
 
         # update attributes if needed
-        if batch_size:
+        if batch_size is not None:
             self.batch_size = batch_size
-        if learning_rate:
+        if learning_rate is not None:
             self.learning_rate = learning_rate
-        if reg_strength:
+        if reg_strength is not None:
             self.reg_strength = reg_strength
         
         self._set_dev_flag(X_dev, y_dev)
@@ -607,9 +607,9 @@ class ChunkNN(SmoothNN):
         self._rounds.append(self._epoch)
 
         # update attributes if needed
-        if learning_rate:
+        if learning_rate is not None:
             self.learning_rate = learning_rate
-        if reg_strength:
+        if reg_strength is not None:
             self.reg_strength = reg_strength
         
         # initialize the display
@@ -856,9 +856,9 @@ class SuperChunkNN(SmoothNN):
         self._rounds.append(self._epoch)
 
         # update attributes if needed
-        if learning_rate:
+        if learning_rate is not None:
             self.learning_rate = learning_rate
-        if reg_strength:
+        if reg_strength is not None:
             self.reg_strength = reg_strength
 
         # initialize the display
