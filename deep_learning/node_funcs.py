@@ -215,7 +215,8 @@ class CE:
         """y_true is a sparse array"""
 
         # can use log1p because monotonically increases
-        return -np.sum(y_true * np.log1p(y_pred), axis=1)
+        y_pred = np.clip(y_pred, 1e-15, 1 - 1e-15)
+        return -np.sum(y_true * np.log(y_pred), axis=1)
     
     @staticmethod
     def backward(y_pred, y_true):

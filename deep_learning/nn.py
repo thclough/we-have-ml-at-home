@@ -1,11 +1,19 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from . import node_funcs
-import time
+#from . import node_funcs
+import node_funcs
 import joblib
-from . import no_resources
+#from . import no_resources
+import no_resources
+import time
 
 # TODO
+
+## should be able to save and keep same chunks for refine by default
+### with the OPTION to declare a new train, dev, superchunk...
+#### would have to pass a chunk, and then make a generate function for it
+#### which would be the for loop in gradient descent epoch
+##### could modify the chunk class, with option to read the whole thing into memory
 
 ## isinstance BCE
 ## Estimating time to completion 
@@ -37,6 +45,9 @@ class SmoothNN:
             activation (function) : vectorized function to use as activation function
             loss (function) : loss function for the 
         """
+        if self._loaded_model:
+            raise Exception("Cannot add layer to a loaded model")
+
         # Validation
         if self.loss != None:
             raise Exception("Last layer in network already declared given loss function exists")
@@ -84,7 +95,7 @@ class SmoothNN:
             num_epochs=30,
             verbose=True,
             display=True):
-        """Fits the neural network to the data for the first time"""
+        """Fits the neural network to the data for the first time. Subsequent rounds of training use refine"""
         
         # validate inputs def validate_structure
         self._val_structure()
@@ -92,11 +103,16 @@ class SmoothNN:
         # clear data for the first fit
         self._has_fit = True
         self._epoch = 0
+
         self._train_costs = []
         self._dev_costs = []
+
         self._learning_rates = []
         self._reg_strengths = []
         self._batch_sizes = []
+
+        self._rounds = []
+
         self._train_collection = None
         self._dev_collection = None
 
@@ -113,11 +129,14 @@ class SmoothNN:
             print("WARNING: Creating new set of params")
         self._get_initial_params() 
 
-        self.refine(X_train=X_train,
-                    y_train=y_train,
-                    X_dev=X_dev,
-                    y_dev=y_dev,
-                    batch_size=batch_size)
+        self.refine(X_train=X_train,y_train=y_train,
+                    X_dev=X_dev, y_dev=y_dev,
+                    batch_size=batch_size,
+                    learning_rate=learning_rate,
+                    reg_strength=reg_strength,
+                    num_epochs=num_epochs,
+                    verbose=verbose,
+                    display=display)
 
     def refine(self, 
             X_train, y_train, 
@@ -125,7 +144,7 @@ class SmoothNN:
             batch_size=None,
             learning_rate=None, 
             reg_strength=None,
-            num_epochs=None,
+            num_epochs=15,
             verbose=True,
             display=True):
         """Fits the neural network to the data.
@@ -145,6 +164,9 @@ class SmoothNN:
         if not self._has_fit:
             raise Exception("Please fit the model before refining")
 
+        # add rounds
+        self._rounds.append(self._epoch)
+
         # update attributes if needed
         if batch_size:
             self.batch_size = batch_size
@@ -153,19 +175,17 @@ class SmoothNN:
         if reg_strength:
             self.reg_strength = reg_strength
         
-        self._set_dev_flag()
+        self._set_dev_flag(X_dev, y_dev)
 
         # set up loss plot
         if display:
-            fig, ax = plt.subplots()
-            ax.set_title(f"Average Loss ({self.loss.name}) vs. Epoch")
-            ax.set_xlabel("Epoch")
-            ax.set_ylabel("Average Loss")
+            fig, ax = self._initialize_epoch_plot()
 
-        end_epoch = self._epoch+num_epochs
+        start_epoch = self._epoch
+        end_epoch = self._epoch + num_epochs
 
         # go through the epochs
-        for epoch in range(self._epoch, end_epoch):
+        for epoch in range(start_epoch, end_epoch):
 
             # update epoch data
             self._learning_rates.append(self.learning_rate)
@@ -185,10 +205,11 @@ class SmoothNN:
                 print(f"Training Avg Loss: {self._train_costs[-1]}")
                 
             if display:
-                # epoch in loop indexed at 0, add 1 to start indexing at 1
                 self._update_epoch_plot(fig, ax, epoch, end_epoch)
 
             self._epoch += 1
+
+        plt.close()
 
     def _val_structure(self):
         """validate the structure of the the NN"""
@@ -365,6 +386,10 @@ class SmoothNN:
         if type(potential_model) != cls:
             raise Exception("New model must be of the type called")
         potential_model._loaded_model = True
+
+        # clear graphing data
+        potential_model._train_collection = []
+        potential_model._dev_collection = []
         return potential_model
 
     def predict_prob(self, X):
@@ -414,6 +439,24 @@ class SmoothNN:
         offsets = np.c_[new_x, new_y]
         collection.set_offsets(offsets)
 
+    def _initialize_epoch_plot(self):
+        plt.close()
+        fig, ax = plt.subplots()
+        ax.set_title(f"Average Loss ({self.loss.name}) vs. Epoch")
+        ax.set_xlabel("Epoch")
+        ax.set_ylabel("Average Loss")
+        if len(self._rounds) > 1:
+            for round, pos in enumerate(self._rounds):
+                ax.axvline(x=pos, linestyle="--", alpha=.5, c="grey")
+                ax.text(x=pos+.1, y=.75, 
+                        color="grey",
+                        s=f"Round {round}", 
+                        rotation=90, 
+                        verticalalignment='top', 
+                        horizontalalignment='left',
+                        transform=ax.get_xaxis_transform())
+        return fig, ax
+
     def _update_epoch_plot(self, fig, ax, epoch, num_epochs):
         """Updates training plot to display average losses
 
@@ -424,20 +467,20 @@ class SmoothNN:
             num_epochs (int) : total number of epochs
         """
         if not self._train_collection:
-            self._train_collection = ax.scatter(range(0,epoch+1), self._train_costs, c="black", label="Average training loss")
+            self._train_collection = ax.scatter(range(0,epoch+1), self._train_costs, marker="x", c="red", alpha=.5, label="Average training loss")
             ax.legend()
         else:
             self._update_scatter(self._train_collection, range(0,epoch+1), self._train_costs)
 
         if self._dev_flag:
             if not self._dev_collection:
-                self._dev_collection, = ax.scatter(range(0,epoch+1), self._dev_costs, c="grey", label="Average dev loss")
+                self._dev_collection = ax.scatter(range(0,epoch+1), self._dev_costs, marker="x", c="blue", alpha=.5, label="Average dev loss")
                 ax.legend()
             else:
                 self._update_scatter(self._dev_collection, range(0,epoch+1), self._dev_costs)
 
-        max_val = np.max(np.concatenate([self._dev_costs, self._train_costs]))
-        ax.set(xlim=[0,num_epochs], ylim=[min(0, max_val*2),max(0, max_val*2)])
+        max_val = max([d for d in self._dev_costs if d is not None] + [t for t in self._train_costs if t is not None])
+        ax.set(xlim=[-.5,num_epochs], ylim=[min(0, max_val*2),max(0, max_val*2)])
         plt.pause(.2)
 
     def predict_labels(self, X):
@@ -482,6 +525,7 @@ class SmoothNN:
     
 class ChunkNN(SmoothNN):
     """NN class for chunking data from separate locations using no_resources.Chunk"""
+
     def fit(self,
             train_chunk,
             dev_chunk=None,
@@ -490,89 +534,143 @@ class ChunkNN(SmoothNN):
             num_epochs=30,
             epoch_gap=5,
             batch_prob=.01,
-            param_path=None,
+            model_path=None,
+            display_path=None,
+            verbose=True, 
+            display=True):
+
+        # validate inputs def validate_structure
+        super()._val_structure()
+        
+        # clear data for the first fit
+        self._has_fit = True
+        self._epoch = 0
+
+        self._train_costs = []
+        self._dev_costs = []
+
+        self._learning_rates = []
+        self._reg_strengths = []
+        self._batch_sizes = []
+
+        self._batch_prob = batch_prob
+
+        self._rounds = []
+
+        self._train_collection = None
+        self._dev_collection = None
+
+        # get the initial weights and biases
+        if verbose:
+            print("WARNING: Creating new set of params")
+        super()._get_initial_params()
+
+        self.refine(train_chunk=train_chunk,
+                    dev_chunk=dev_chunk,
+                    learning_rate=learning_rate, 
+                    reg_strength=reg_strength,
+                    num_epochs=num_epochs,
+                    epoch_gap=epoch_gap,
+                    model_path=model_path,
+                    display_path=display_path,
+                    verbose=verbose, 
+                    display=display)
+        
+    def refine(self,
+            train_chunk,
+            dev_chunk=None,
+            learning_rate=None, 
+            reg_strength=None,
+            num_epochs=15,
+            epoch_gap=5,
+            model_path=None,
             display_path=None,
             verbose=True, 
             display=True):
         
-        self.learning_rate = learning_rate
-        self.reg_strength = reg_strength
-        self._dev_flag = False # flag if there is a dev set
-
-        if dev_chunk:
-            self._dev_flag = True
+        if not self._has_fit:
+            raise Exception("Please fit the model before refining")
 
         if not train_chunk._train_chunk:
             raise Exception("Given train chunk must be a valid train chunk (_train_chunk attribute set to True)")
+        
+        self.train_chunk = train_chunk
+        # set chunks
+        batch_size = train_chunk.chunk_size
 
-        # validate structure
-        super()._val_structure()
+        self._dev_flag = False
+        if dev_chunk:
+            self.dev_chunk = dev_chunk
+            self._dev_flag = True
 
-        # get initial params if none loaded
-        if not self.params:
-            print("WARNING: Creating new set of params")
-            super()._get_initial_params() 
+        # add rounds
+        self._rounds.append(self._epoch)
 
-        # initialize lists for costs
-        self._train_costs = []
-        self._dev_costs = []
-
+        # update attributes if needed
+        if learning_rate:
+            self.learning_rate = learning_rate
+        if reg_strength:
+            self.reg_strength = reg_strength
+        
+        # initialize the display
         if display:
-            fig, ax = plt.subplots()
-            ax.set_title(f"Average Loss ({self.loss.name}) vs. Epoch Gap")
-            ax.set_xlabel("Epoch")
-            ax.set_ylabel("Average Loss")
+            fig, ax = super()._initialize_epoch_plot()
 
-        for epoch in range(num_epochs):
+        start_epoch = self._epoch
+        end_epoch = self._epoch + num_epochs
 
-            self._learning_rates.append(self.learning_rate)
-            self._reg_strengths.append(self.reg_strength)
-
+        for epoch in range(start_epoch, end_epoch):
             print(f"Epoch: {epoch}")
             epoch_start_time = time.time()
-            #start_time = time.time()
+
+            # update epoch data
+            self._learning_rates.append(self.learning_rate)
+            self._reg_strengths.append(self.reg_strength)
+            self._batch_sizes.append(batch_size)
 
             np.random.seed(100)
 
+            #start_gen = time.time()
             for X_train, y_train in train_chunk.generate():
+                #end_gen = time.time()
+                #print(f"gen time {end_gen-start_gen}")
 
+                #start_batch = time.time()
                 super()._batch_total_pass(X_train, y_train)
-
-                # end_time = time.time()
-                # print(f"Time for loop {end_time-start_time}")
+                #end_batch = time.time()
+                # print(f"batch time: {end_batch-start_batch}")
 
                 if verbose:
-                    if np.random.binomial(1, batch_prob):
+                    if np.random.binomial(1, self._batch_prob):
                         sampled_batch_loss = super().avg_loss(X_train, y_train)
 
                         print(f"\t Sampled batch loss: {sampled_batch_loss}")
+                
+                #start_gen = time.time()
 
-                # start_time = time.time()
             epoch_end_time = time.time()
 
             print(f"Epoch completion time: {(epoch_end_time-epoch_start_time) / 3600} Hours")
-
-            if param_path:
-                joblib.dump(self.params,param_path)
-
+            
             # record costs after each epoch gap
             if epoch % epoch_gap == 0:
                 gap_start_time = time.time()
 
-                epoch_train_cost = self.chunk_loss(train_chunk)
+                epoch_train_cost = self.chunk_loss(self.train_chunk)
                 self._train_costs.append(epoch_train_cost)
                 if verbose:
                     print(f"\t Training cost: {epoch_train_cost}")
 
                 if self._dev_flag:
-                    epoch_dev_cost = self.chunk_loss(dev_chunk)
+                    epoch_dev_cost = self.chunk_loss(self.dev_chunk)
                     self._dev_costs.append(epoch_dev_cost)
                     if verbose:
                         print(f"\t Dev cost: {epoch_dev_cost}")
+                else:
+                    self._dev_costs.append(None)
 
                 if display:
-                    true_epoch = epoch + 1
-                    super()._update_epoch_plot(fig, ax, true_epoch, num_epochs)
+                    super()._update_epoch_plot(fig, ax, epoch, num_epochs)
 
                 gap_end_time = time.time()
 
@@ -580,10 +678,23 @@ class ChunkNN(SmoothNN):
             else:
                 self._train_costs.append(None)
                 self._dev_costs.append(None)
-        
+
+            self._epoch += 1
+            if model_path:
+                self.save_model(model_path, train_chunk, dev_chunk)
+
         if display and display_path:
             fig.savefig(display_path)
-                
+
+        plt.close()
+
+    def save_model(self, path, train_chunk, dev_chunk):
+        self.train_chunk = None
+        self.dev_chunk = None
+        super().save_model(path)
+        self.train_chunk = train_chunk
+        self.dev_chunk = dev_chunk
+
     def chunk_loss(self, eval_chunk):
         """"Calculate loss on the eval chunk"""
         
@@ -625,6 +736,7 @@ class ChunkNN(SmoothNN):
         Args:
             eval_chunk (Chunk) : chunk to generate classification matrix for. 
                 True labels along 0 axis and predicted labels along 1st axis.
+
         Returns:
             sorted_labels_key (dict) : {label value : idx} dictionary key for matrices
             report (numpy array) : classification matrix for the chunk
@@ -664,7 +776,6 @@ class ChunkNN(SmoothNN):
 
         return sorted_labels_key, report
 
-
 class SuperChunkNN(SmoothNN):
     """NN class for SuperChunk iterator for large datasets
     see no_resources.SuperChunk"""
@@ -675,52 +786,98 @@ class SuperChunkNN(SmoothNN):
             num_epochs=30,
             epoch_gap=5,
             batch_prob=.01,
-            param_path=None,
+            model_path=None,
             display_path=None,
             verbose=True, 
             display=True):
-        """Feeds data from chunk generator into model for training
         
-        Args:
-        """
+        # validate the inputs
+        super()._val_structure()
+
+        # clear data for the first fit
+        self._has_fit = True
+        self._epoch = 0
+
+        self._train_costs = []
+        self._dev_costs = []
+
+        self._learning_rates = []
+        self._reg_strengths = []
+        self._batch_sizes = []
+
+        self._batch_prob = batch_prob
+
+        self._rounds = []
+
+        self._train_collection = None
+        self._dev_collection = None
+
+        # get the initial weights and biases
+        if verbose:
+            print("WARNING: Creating new set of params")
+        super()._get_initial_params()
+
+        self.refine(super_chunk=super_chunk,
+                    learning_rate=learning_rate, 
+                    reg_strength=reg_strength,
+                    num_epochs=num_epochs,
+                    epoch_gap=epoch_gap,
+                    model_path=model_path,
+                    display_path=display_path,
+                    verbose=verbose, 
+                    display=display)
+
+    
+    def refine(self, 
+            super_chunk, 
+            learning_rate=None, 
+            reg_strength=None,
+            num_epochs=15,
+            epoch_gap=5,
+            batch_prob=.01,
+            model_path=None,
+            display_path=None,
+            verbose=True, 
+            display=True):
+        """Feeds data from chunk generator into model for training"""
+        if not self._has_fit:
+            raise Exception("Please fit the model before refining")
+        
         # set attributes
         self.super_chunk = super_chunk
         if self.super_chunk.tdt_sizes[1] > 0:
             self._dev_flag = True
         else:
             self._dev_flag = False
-        self.learning_rate = learning_rate
-        self.reg_strength = reg_strength
 
-        # validate inputs
-        super()._val_structure
+        batch_size = round(self.super_chunk.tdt_sizes[0] * self.super_chunk.chunk_size)
+        
+        # add rounds
+        self._rounds.append(self._epoch)
 
-        # get initial params if none loaded
-        if not self.params:
-            print("WARNING: Creating new set of params")
-            super()._get_initial_params() 
+        # update attributes if needed
+        if learning_rate:
+            self.learning_rate = learning_rate
+        if reg_strength:
+            self.reg_strength = reg_strength
 
-        # initialize lists for costs
-        self._train_costs = []
-        self._dev_costs = []
-
+        # initialize the display
         if display:
-            fig, ax = plt.subplots()
-            ax.set_title(f"Average Loss ({self.loss.name}) vs. Epoch Gap")
-            ax.set_xlabel("Epoch")
-            ax.set_ylabel("Average Loss")
+            fig, ax = super()._initialize_epoch_plot()
 
-        for epoch in range(num_epochs):
+        start_epoch = self._epoch
+        end_epoch = self._epoch + num_epochs
 
-            self._learning_rates.append(self.learning_rate)
-            self._reg_strengths.append(self.reg_strength)
+        for epoch in range(start_epoch, end_epoch):
 
             print(f"Epoch: {epoch}")
             epoch_start_time = time.time()
             #start_time = time.time()
+            self._learning_rates.append(self.learning_rate)
+            self._reg_strengths.append(self.reg_strength)
+            self._batch_sizes.append(batch_size)
 
-            for data in self.super_chunk.generate():
-                X_train, y_train, _, _, _, _ = data
+            for X_train, y_train, _, _, _, _ in self.super_chunk.generate():
 
                 super()._batch_total_pass(X_train, y_train)
 
@@ -738,9 +895,6 @@ class SuperChunkNN(SmoothNN):
 
             print(f"Epoch completion time: {(epoch_end_time-epoch_start_time) / 3600} Hours")
 
-            if param_path:
-                joblib.dump(self.params,param_path)
-
             # record costs after each epoch gap
             if epoch % epoch_gap == 0:
                 gap_start_time = time.time()
@@ -754,17 +908,32 @@ class SuperChunkNN(SmoothNN):
                     self._dev_costs.append(epoch_dev_cost)
                     if verbose:
                         print(f"\t Dev cost: {epoch_dev_cost}")
+                else:
+                    self._dev_costs.append(None)
 
                 if display:
-                    true_epoch = epoch + 1
-                    super()._update_epoch_plot(fig, ax, true_epoch, num_epochs, epoch_gap)
+                    super()._update_epoch_plot(fig, ax, epoch, num_epochs)
 
                 gap_end_time = time.time()
 
                 print(f"Gap completion time: {(gap_end_time-gap_start_time) / 3600} Hours")
+            else:
+                self._train_costs.append(None)
+                self._dev_costs.append(None)
+            
+            self._epoch += 1
+            if model_path:
+                self.save_model(model_path, super_chunk)
 
         if display and display_path:
             fig.savefig(display_path)
+
+        plt.close()
+
+    def save_model(self, path, super_chunk):
+        self.super_chunk = None
+        super().save_model(path)
+        self.super_chunk = super_chunk
             
     def get_td_costs(self):
 
@@ -796,6 +965,9 @@ class SuperChunkNN(SmoothNN):
             dev_cost = dev_loss_sum / dev_length
         else:
             dev_cost = None
+
+        print("train and dev lengths")
+        print(train_length, dev_length)
 
         return train_cost, dev_cost
 
