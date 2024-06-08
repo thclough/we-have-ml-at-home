@@ -214,7 +214,6 @@ class CE:
     def forward(y_pred, y_true):
         """y_true is a sparse array"""
 
-        # can use log1p because monotonically increases
         y_pred = np.clip(y_pred, 1e-15, 1 - 1e-15)
         return -np.sum(y_true * np.log(y_pred), axis=1)
     

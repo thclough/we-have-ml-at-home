@@ -1,10 +1,8 @@
 import numpy as np
 import matplotlib.pyplot as plt
-#from . import node_funcs
-import node_funcs
+from . import node_funcs
 import joblib
-#from . import no_resources
-import no_resources
+from . import no_resources
 import time
 
 # TODO
@@ -37,22 +35,26 @@ class SmoothNN:
         self._loaded_model=False
         self.loss=None
 
-    def add_layer(self, layer_size, activation=None, loss=None):
+    def add_layer(self, layer_size, activation=None, loss=None, keep_prob=1.0):
         """Add layer to the neural network
         
         Args:
             layer_size (int) : size of the layer
             activation (function) : vectorized function to use as activation function
-            loss (function) : loss function for the 
+            loss (function) : loss function for the last layer
+            keep_prob (float) : probability that node is kept in hidden layer for inverted dropout
         """
         if self._loaded_model:
             raise Exception("Cannot add layer to a loaded model")
 
         # Validation
-        if self.loss != None:
+        if self.loss is not None:
             raise Exception("Last layer in network already declared given loss function exists")
 
         ## for loss
+        if loss and keep_prob != 1.0:
+            raise Exception("Dropout cannot be applied to the output layer")
+        
         if loss == node_funcs.BCE:
             if layer_size != 1:
                 raise Exception("Should use output layer of size 1 when using binary cross entropy loss,\
@@ -64,13 +66,16 @@ class SmoothNN:
         
         ## for first layer
         if len(self.layers) == 0:
-            if activation != None:
-                raise Exception("First layer should not have an activation function")
+            if activation is not None:
+                raise Exception("Input layer should not have an activation function")
             if loss:
-                raise Exception("First layer should not have a loss function")
+                raise Exception("Input layer should not have a loss function")
+            if keep_prob != 1.0:
+                raise Exception("Dropout cannot be applied to the output layer")
+
 
         # append layer to the layers list
-        self.layers.append({"size": layer_size, "activation": activation, "loss":loss})
+        self.layers.append({"size": layer_size, "activation": activation, "loss":loss, "keep_prob":keep_prob})
 
         # increment the amount of layers
         self.num_layers += 1
@@ -233,7 +238,14 @@ class SmoothNN:
             input_size = self.layers[layer_idx - 1]["size"]
             output_size = self.layers[layer_idx]["size"]
             
-            self.params[f"W{layer_idx}"] = np.random.normal(size=(input_size, output_size)) * .01
+            layer_activation = self.layers["activation"]
+
+            if isinstance(layer_activation, (node_funcs.ReLU, node_funcs.LeakyReLU)):
+                factor = 2 / input_size
+            else:
+                factor = 1 / input_size
+
+            self.params[f"W{layer_idx}"] = np.random.normal(size=(input_size, output_size)) * np.sqrt(factor)
             self.params[f"b{layer_idx}"] = np.zeros(shape=output_size)
 
     def _gradient_descent_epoch(self, X_train, y_train):
@@ -297,15 +309,15 @@ class SmoothNN:
             X_train (numpy array) : training examples (num_examples x num_features)
         
         Returns:
-            za_vals (dictionary) : dictionary of node precursors and activation values
-                where "an" or "an" would correspond to the nth layer indexed at 0
+            forward_cache (dictionary) : dictionary of node precursors, activation values, and masks
+                where "an" or "zn" would correspond to the nth layer indexed at 0
         """
         
         # to hold activation values (a)
-        za_vals = {}
+        forward_cache = {}
 
         # set the data as "a0"
-        za_vals["a0"] = X_train
+        forward_cache["a0"] = X_train
 
         # go through the layers and save the activations
         for layer in range(self.num_layers-1):
@@ -314,21 +326,29 @@ class SmoothNN:
             activation_func = self.layers[web_idx]["activation"]
             W = self.params[f"W{web_idx}"]
             b = self.params[f"b{web_idx}"]
-            a_behind = za_vals[f"a{layer}"]
+            a_behind = forward_cache[f"a{layer}"]
+            forward_cache[f"z{web_idx}"] = a_behind @ W + b
 
-            za_vals[f"z{web_idx}"] = a_behind @ W + b
-            za_vals[f"a{web_idx}"] = activation_func.forward(za_vals[f"z{web_idx}"])
+            keep_prob = self.layers["keep_prob"]
+
+            # handle dropout conditions
+            if keep_prob == 1.0:
+                forward_cache[f"a{web_idx}"] = activation_func.forward(forward_cache[f"z{web_idx}"])
+            else:
+                dropout_mask = (np.random.rand((self.layers[web_idx], 1)) < keep_prob).astype(int)
+                forward_cache[f"d{web_idx}"] = dropout_mask
+                forward_cache[f"a{web_idx}"] = (activation_func.forward(forward_cache[f"z{web_idx}"]) * dropout_mask) / keep_prob
     
-        return za_vals
+        return forward_cache
 
-    def _backward_prop(self, X, y, za_vals):
+    def _backward_prop(self, X, y, forward_cache):
         """perform backprop
         
         Args:
             X (numpy array) : examples to predict on (num_examples x num_features)
             y (numpy array) : true labels (num_examples x 1)
-            za_vals (dictionary) : dictionary of node precursors and activation values
-                where "an" or "an" would correspond to the nth layer indexed at 0 
+            forward_cache (dictionary) : dictionary of node precursors and activation values
+                where "an" would correspond to the nth layer indexed at 0 
         """
         # get number of training examples
         n = len(X)
@@ -339,9 +359,9 @@ class SmoothNN:
 
             #time0_1 = time.time()
             # get the node precursors (z's) and activation values
-            a_behind = za_vals[f"a{layer-1}"]
-            a_ahead = za_vals[f"a{layer}"]
-            z_ahead = za_vals[f"z{layer}"]
+            a_behind = forward_cache[f"a{layer-1}"]
+            a_ahead = forward_cache[f"a{layer}"]
+            z_ahead = forward_cache[f"z{layer}"]
             activation = self.layers[layer]["activation"]
 
             W = self.params[f"W{layer}"]
@@ -352,16 +372,22 @@ class SmoothNN:
             else: # move gradient backward
                 dJ_da_ahead = dJ_dz_past @ W_ahead.T
                 da_dz_ahead = activation.backward(z_ahead)
-                dJ_dz_ahead = dJ_da_ahead * da_dz_ahead
+
+                keep_prob = self.layers[layer]["keep_prob"]
+
+                if keep_prob == 1.0:
+                    dJ_dz_ahead = dJ_da_ahead * da_dz_ahead
+                else:
+                    dropout_mask = forward_cache[f"d{layer}"]
+                    dJ_dz_ahead = (dJ_da_ahead * da_dz_ahead * dropout_mask) / keep_prob
 
             #time0_3 = time.time()
 
-            # cases for efficiency, for regularization, operating on large W matrix (even with reg strength of 0)
-            # can be very time expensive
+            # cases for efficiency, for regularization, operating on large W matrix (even with reg strength of 0) is time expensive
             if self.reg_strength == 0:
-                grad_dict[f"W{layer}"] = a_behind.T @ (dJ_dz_ahead * (1/n)) 
+                grad_dict[f"W{layer}"] = a_behind.T @ (dJ_dz_ahead / n)
             else:
-                grad_dict[f"W{layer}"] = a_behind.T @ (dJ_dz_ahead * (1/n)) + 2 * self.reg_strength * W
+                grad_dict[f"W{layer}"] = a_behind.T @ (dJ_dz_ahead / n) + 2 * (self.reg_strength / n) * W
 
             grad_dict[f"b{layer}"] = dJ_dz_ahead.mean(axis=0)
 
@@ -426,13 +452,21 @@ class SmoothNN:
         Args:
             X (numpy array) : examples to predict on (num_examples x num_features)
             y (numpy array) : true labels (num_examples x 1)
+
+        Returns:
+            cost (numpy array) : average loss given predictions on X and truth y
         
         """
         # calculate activation values for each layer (includes predicted values)
         y_pred = self.predict_prob(X)
 
-        # return avg of the losses
-        return np.mean(self.loss.forward(y_pred, y))
+        cost = np.mean(self.loss.forward(y_pred, y))
+
+        # L2 regularization loss with Frobenius norm
+        if self.reg_strength != 0: 
+            cost = cost + (self.reg_strength / len(X)) * sum(np.sum(self.params[f"W{layer}"] ** 2) for layer in range(1, self.num_layers-1))
+
+        return cost
 
     @staticmethod
     def _update_scatter(collection, new_x, new_y):
@@ -670,7 +704,7 @@ class ChunkNN(SmoothNN):
                     self._dev_costs.append(None)
 
                 if display:
-                    super()._update_epoch_plot(fig, ax, epoch, num_epochs)
+                    super()._update_epoch_plot(fig, ax, epoch, end_epoch)
 
                 gap_end_time = time.time()
 
@@ -683,8 +717,8 @@ class ChunkNN(SmoothNN):
             if model_path:
                 self.save_model(model_path, train_chunk, dev_chunk)
 
-        if display and display_path:
-            fig.savefig(display_path)
+            if display and display_path:
+                fig.savefig(display_path)
 
         plt.close()
 
@@ -912,7 +946,7 @@ class SuperChunkNN(SmoothNN):
                     self._dev_costs.append(None)
 
                 if display:
-                    super()._update_epoch_plot(fig, ax, epoch, num_epochs)
+                    super()._update_epoch_plot(fig, ax, epoch, end_epoch)
 
                 gap_end_time = time.time()
 
@@ -925,8 +959,8 @@ class SuperChunkNN(SmoothNN):
             if model_path:
                 self.save_model(model_path, super_chunk)
 
-        if display and display_path:
-            fig.savefig(display_path)
+            if display and display_path:
+                fig.savefig(display_path)
 
         plt.close()
 
