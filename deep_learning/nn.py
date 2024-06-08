@@ -1,8 +1,10 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from . import node_funcs
+#from . import node_funcs
+import node_funcs
 import joblib
-from . import no_resources
+#from . import no_resources
+import no_resources
 import time
 
 # TODO
@@ -238,7 +240,7 @@ class SmoothNN:
             input_size = self.layers[layer_idx - 1]["size"]
             output_size = self.layers[layer_idx]["size"]
             
-            layer_activation = self.layers["activation"]
+            layer_activation = self.layers[layer_idx]["activation"]
 
             if isinstance(layer_activation, (node_funcs.ReLU, node_funcs.LeakyReLU)):
                 factor = 2 / input_size
@@ -329,13 +331,13 @@ class SmoothNN:
             a_behind = forward_cache[f"a{layer}"]
             forward_cache[f"z{web_idx}"] = a_behind @ W + b
 
-            keep_prob = self.layers["keep_prob"]
+            keep_prob = self.layers[web_idx]["keep_prob"]
 
             # handle dropout conditions
             if keep_prob == 1.0:
                 forward_cache[f"a{web_idx}"] = activation_func.forward(forward_cache[f"z{web_idx}"])
             else:
-                dropout_mask = (np.random.rand((self.layers[web_idx], 1)) < keep_prob).astype(int)
+                dropout_mask = (np.random.rand(1, self.layers[web_idx]["size"]) < keep_prob).astype(int)
                 forward_cache[f"d{web_idx}"] = dropout_mask
                 forward_cache[f"a{web_idx}"] = (activation_func.forward(forward_cache[f"z{web_idx}"]) * dropout_mask) / keep_prob
     
