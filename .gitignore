@@ -3,4 +3,4 @@
 .gitignore
 *test*.py
 models/
-deep_learning/.DS_Store
+*.DS_Store*

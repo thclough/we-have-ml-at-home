@@ -7,10 +7,12 @@ import re
 import time
 import warnings
 import traceback
-#from . import utils
-import utils
 import random
 from contextlib import ExitStack
+
+# import utils
+from . import utils
+
 
 #TODO
 ## automatically create jar openers for setting input

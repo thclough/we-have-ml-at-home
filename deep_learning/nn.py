@@ -1,11 +1,14 @@
 import numpy as np
 import matplotlib.pyplot as plt
-#from . import node_funcs
-import node_funcs
 import joblib
-#from . import no_resources
-import no_resources
 import time
+from . import node_funcs
+from . import no_resources
+from . import learning_funcs
+
+# import no_resources
+# import learning_funcs
+# import node_funcs
 
 # TODO
 
@@ -97,7 +100,7 @@ class SmoothNN:
             X_train, y_train, 
             X_dev=None, y_dev=None,
             batch_size=None,
-            learning_rate=1, 
+            learning_scheduler=learning_funcs.ConstantRate(1),
             reg_strength=0.0001,
             num_epochs=30,
             verbose=True,
@@ -113,6 +116,8 @@ class SmoothNN:
 
         self._train_costs = []
         self._dev_costs = []
+
+        self._learning_scheduler = learning_scheduler
 
         self._learning_rates = []
         self._reg_strengths = []
@@ -139,7 +144,6 @@ class SmoothNN:
         self.refine(X_train=X_train,y_train=y_train,
                     X_dev=X_dev, y_dev=y_dev,
                     batch_size=batch_size,
-                    learning_rate=learning_rate,
                     reg_strength=reg_strength,
                     num_epochs=num_epochs,
                     verbose=verbose,
@@ -149,7 +153,6 @@ class SmoothNN:
             X_train, y_train, 
             X_dev=None, y_dev=None,
             batch_size=None,
-            learning_rate=None, 
             reg_strength=None,
             num_epochs=15,
             verbose=True,
@@ -162,9 +165,9 @@ class SmoothNN:
             X_dev (numpy array) : dev examples
             y_dev (numpy array) : dev labels
             batch_size (int) : size of the batches
-            learning_rate (numeric) : learning rate for gradient descent
+            learning_scheduler (function) : learning rate scheduler function instance
             reg_strength (numeric) : multiplier for regularization in gradient descent
-            num_epochs (int) : number of cycles through the training data
+            num_epochs (int, default=15) : number of cycles through the training data
             verbose (bool, default = True) : whether or not to print training loss after each epoch
             display (bool, default = True) : whether or not to plot training (and dev) average loss after each epoch
         """
@@ -177,8 +180,6 @@ class SmoothNN:
         # update attributes if needed
         if batch_size is not None:
             self.batch_size = batch_size
-        if learning_rate is not None:
-            self.learning_rate = learning_rate
         if reg_strength is not None:
             self.reg_strength = reg_strength
         
@@ -193,6 +194,9 @@ class SmoothNN:
 
         # go through the epochs
         for epoch in range(start_epoch, end_epoch):
+            
+            # get the learning_rate
+            self.learning_rate = self._learning_scheduler.get_learning_rate(epoch)
 
             # update epoch data
             self._learning_rates.append(self.learning_rate)
@@ -258,6 +262,9 @@ class SmoothNN:
             y_train (numpy array) : training array (num_examples x 1)
         
         """
+
+        self._set_epoch_dropout_masks()
+
         n = len(X_train)
 
         #start_train_time = time.time()
@@ -277,8 +284,24 @@ class SmoothNN:
 
             #start_train_time = cur_train_time
 
+    def _set_epoch_dropout_masks(self, seed=100):
+        """Create masks for the epoch so masks can stay consistent throughout an epoch, 
+        but also differ from epoch to epoch"""
+
+        # set random seed for consistency
+        np.random.seed(seed+self._epoch)
+
+        self._epoch_dropout_masks = {}
+
+        for hidden_layer in range(1, self.num_layers-1):
+            keep_prob = self.layers[hidden_layer]["keep_prob"]
+
+            # set a dropout mask between 
+            if keep_prob != 1.0:
+                self._epoch_dropout_masks[f"d{hidden_layer}"] = (np.random.rand(1, self.layers[hidden_layer]["size"]) < keep_prob).astype(int)
+
     def _batch_total_pass(self, X_train_batch, y_train_batch):
-        """forward propagation, backward propagation and parameter updates for """
+        """forward propagation, backward propagation and parameter updates for gradient descent"""
         #time3 = time.time()
         # forward pass
         node_vals_batch = self._forward_prop(X_train_batch)
@@ -337,7 +360,8 @@ class SmoothNN:
             if keep_prob == 1.0:
                 forward_cache[f"a{web_idx}"] = activation_func.forward(forward_cache[f"z{web_idx}"])
             else:
-                dropout_mask = (np.random.rand(1, self.layers[web_idx]["size"]) < keep_prob).astype(int)
+                #dropout_mask = (np.random.rand(1, self.layers[web_idx]["size"]) < keep_prob).astype(int)
+                dropout_mask = self._epoch_dropout_masks[f"d{web_idx}"]
                 forward_cache[f"d{web_idx}"] = dropout_mask
                 forward_cache[f"a{web_idx}"] = (activation_func.forward(forward_cache[f"z{web_idx}"]) * dropout_mask) / keep_prob
     
@@ -380,7 +404,8 @@ class SmoothNN:
                 if keep_prob == 1.0:
                     dJ_dz_ahead = dJ_da_ahead * da_dz_ahead
                 else:
-                    dropout_mask = forward_cache[f"d{layer}"]
+                    #dropout_mask = forward_cache[f"d{layer}"]
+                    dropout_mask = self._epoch_dropout_masks[f"d{layer}"]
                     dJ_dz_ahead = (dJ_da_ahead * da_dz_ahead * dropout_mask) / keep_prob
 
             #time0_3 = time.time()
@@ -389,7 +414,7 @@ class SmoothNN:
             if self.reg_strength == 0:
                 grad_dict[f"W{layer}"] = a_behind.T @ (dJ_dz_ahead / n)
             else:
-                grad_dict[f"W{layer}"] = a_behind.T @ (dJ_dz_ahead / n) + 2 * (self.reg_strength / n) * W
+                grad_dict[f"W{layer}"] = a_behind.T @ (dJ_dz_ahead / n) + 2 * self.reg_strength * W
 
             grad_dict[f"b{layer}"] = dJ_dz_ahead.mean(axis=0)
 
@@ -466,7 +491,7 @@ class SmoothNN:
 
         # L2 regularization loss with Frobenius norm
         if self.reg_strength != 0: 
-            cost = cost + (self.reg_strength / len(X)) * sum(np.sum(self.params[f"W{layer}"] ** 2) for layer in range(1, self.num_layers-1))
+            cost = cost + self.reg_strength * sum(np.sum(self.params[f"W{layer}"] ** 2) for layer in range(1, self.num_layers-1))
 
         return cost
 
@@ -565,11 +590,12 @@ class ChunkNN(SmoothNN):
     def fit(self,
             train_chunk,
             dev_chunk=None,
-            learning_rate=1, 
+            learning_scheduler=learning_funcs.ConstantRate(1),
             reg_strength=0.0001,
             num_epochs=30,
             epoch_gap=5,
             batch_prob=.01,
+            batch_seed=100,
             model_path=None,
             display_path=None,
             verbose=True, 
@@ -585,11 +611,14 @@ class ChunkNN(SmoothNN):
         self._train_costs = []
         self._dev_costs = []
 
+        self._learning_scheduler = learning_scheduler
+
         self._learning_rates = []
         self._reg_strengths = []
         self._batch_sizes = []
 
         self._batch_prob = batch_prob
+        self._batch_seed = batch_seed
 
         self._rounds = []
 
@@ -603,7 +632,6 @@ class ChunkNN(SmoothNN):
 
         self.refine(train_chunk=train_chunk,
                     dev_chunk=dev_chunk,
-                    learning_rate=learning_rate, 
                     reg_strength=reg_strength,
                     num_epochs=num_epochs,
                     epoch_gap=epoch_gap,
@@ -615,7 +643,6 @@ class ChunkNN(SmoothNN):
     def refine(self,
             train_chunk,
             dev_chunk=None,
-            learning_rate=None, 
             reg_strength=None,
             num_epochs=15,
             epoch_gap=5,
@@ -643,8 +670,6 @@ class ChunkNN(SmoothNN):
         self._rounds.append(self._epoch)
 
         # update attributes if needed
-        if learning_rate is not None:
-            self.learning_rate = learning_rate
         if reg_strength is not None:
             self.reg_strength = reg_strength
         
@@ -659,12 +684,18 @@ class ChunkNN(SmoothNN):
             print(f"Epoch: {epoch}")
             epoch_start_time = time.time()
 
+            # update learning rate
+            self.learning_rate = self._learning_scheduler.get_learning_rate(epoch)
+
             # update epoch data
             self._learning_rates.append(self.learning_rate)
             self._reg_strengths.append(self.reg_strength)
             self._batch_sizes.append(batch_size)
 
-            np.random.seed(100)
+            super()._set_epoch_dropout_masks(seed=self._batch_seed)
+
+            # set a seed for sampling batches for loss
+            np.random.seed(self._batch_seed)
 
             #start_gen = time.time()
             for X_train, y_train in train_chunk.generate():
@@ -674,7 +705,7 @@ class ChunkNN(SmoothNN):
                 #start_batch = time.time()
                 super()._batch_total_pass(X_train, y_train)
                 #end_batch = time.time()
-                # print(f"batch time: {end_batch-start_batch}")
+                #print(f"batch time: {end_batch-start_batch}")
 
                 if verbose:
                     if np.random.binomial(1, self._batch_prob):
@@ -817,7 +848,7 @@ class SuperChunkNN(SmoothNN):
     see no_resources.SuperChunk"""
     def fit(self, 
             super_chunk, 
-            learning_rate=1, 
+            learning_scheduler=learning_funcs.ConstantRate(1), 
             reg_strength=0.0001,
             num_epochs=30,
             epoch_gap=5,
@@ -833,6 +864,8 @@ class SuperChunkNN(SmoothNN):
         # clear data for the first fit
         self._has_fit = True
         self._epoch = 0
+
+        self._learning_scheduler = learning_scheduler
 
         self._train_costs = []
         self._dev_costs = []
@@ -854,7 +887,6 @@ class SuperChunkNN(SmoothNN):
         super()._get_initial_params()
 
         self.refine(super_chunk=super_chunk,
-                    learning_rate=learning_rate, 
                     reg_strength=reg_strength,
                     num_epochs=num_epochs,
                     epoch_gap=epoch_gap,
@@ -863,7 +895,6 @@ class SuperChunkNN(SmoothNN):
                     verbose=verbose, 
                     display=display)
 
-    
     def refine(self, 
             super_chunk, 
             learning_rate=None, 
@@ -908,10 +939,15 @@ class SuperChunkNN(SmoothNN):
 
             print(f"Epoch: {epoch}")
             epoch_start_time = time.time()
+
+            # update learning rate
+            self.learning_rate = self._learning_scheduler.get_learning_rate(epoch)
             #start_time = time.time()
             self._learning_rates.append(self.learning_rate)
             self._reg_strengths.append(self.reg_strength)
             self._batch_sizes.append(batch_size)
+
+            super()._set_epoch_dropout_masks(seed=super_chunk.seed)
 
             for X_train, y_train, _, _, _, _ in self.super_chunk.generate():
 
