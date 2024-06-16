@@ -10,7 +10,6 @@ import traceback
 import random
 from contextlib import ExitStack
 
-# import utils
 from . import utils
 
 
@@ -411,8 +410,8 @@ class Chunk:
 
             if self._standardize:
                 if self._train_chunk or self._linked_chunk:
-                    # X_data = (X_data - self._train_mean) / self._train_std
-                    X_data = (X_data - 33.3183) / 78.567
+                    X_data = (X_data - self._train_mean) / self._train_std
+                    #X_data = (X_data - 33.3183) / 78.567
 
             yield X_data, y_data
 

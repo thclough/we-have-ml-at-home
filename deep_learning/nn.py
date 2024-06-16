@@ -2,25 +2,24 @@ import numpy as np
 import matplotlib.pyplot as plt
 import joblib
 import time
+import copy
 from . import node_funcs
 from . import no_resources
 from . import learning_funcs
 
-# import no_resources
-# import learning_funcs
-# import node_funcs
-
 # TODO
 
+# how to have you generator hold in memory a new piece of data, threading??
+## possible with single core
 ## should be able to save and keep same chunks for refine by default
 ### with the OPTION to declare a new train, dev, superchunk...
 #### would have to pass a chunk, and then make a generate function for it
 #### which would be the for loop in gradient descent epoch
 ##### could modify the chunk class, with option to read the whole thing into memory
-
-## isinstance BCE
 ## Estimating time to completion 
-## loss is 1 example, cost is average loss
+## loss is one example, cost is average loss
+## rewriting whole thing with layer objects, for less intermingled integration
+### input, outputs, gradient updates along the way, 
 
 ## different types of regularization
 ## different types of loss
@@ -39,8 +38,10 @@ class SmoothNN:
         self.num_layers = 0
         self._loaded_model=False
         self.loss=None
+        self._stable_constant=10e-8
+        self.expo_norm_dict = {}
 
-    def add_layer(self, layer_size, activation=None, loss=None, keep_prob=1.0):
+    def add_layer(self, layer_size, activation=None, loss=None, keep_prob=1.0, batch_norm=False):
         """Add layer to the neural network
         
         Args:
@@ -57,9 +58,12 @@ class SmoothNN:
             raise Exception("Last layer in network already declared given loss function exists")
 
         ## for loss
-        if loss and keep_prob != 1.0:
-            raise Exception("Dropout cannot be applied to the output layer")
-        
+        if loss:
+            if keep_prob != 1.0:
+                raise Exception("Dropout cannot be applied to the output layer")
+            if batch_norm:
+                raise Exception("Cannot batch normalize output layer")
+
         if loss == node_funcs.BCE:
             if layer_size != 1:
                 raise Exception("Should use output layer of size 1 when using binary cross entropy loss,\
@@ -76,11 +80,12 @@ class SmoothNN:
             if loss:
                 raise Exception("Input layer should not have a loss function")
             if keep_prob != 1.0:
-                raise Exception("Dropout cannot be applied to the output layer")
-
+                raise Exception("Dropout cannot be applied to the input layer")
+            if batch_norm:
+                raise Exception("Cannot batch normalize input layer")
 
         # append layer to the layers list
-        self.layers.append({"size": layer_size, "activation": activation, "loss":loss, "keep_prob":keep_prob})
+        self.layers.append({"size": layer_size, "activation": activation, "loss":loss, "keep_prob":keep_prob, "batch_norm":batch_norm})
 
         # increment the amount of layers
         self.num_layers += 1
@@ -104,7 +109,8 @@ class SmoothNN:
             reg_strength=0.0001,
             num_epochs=30,
             verbose=True,
-            display=True):
+            display=True,
+            gradient_check=False):
         """Fits the neural network to the data for the first time. Subsequent rounds of training use refine"""
         
         # validate inputs def validate_structure
@@ -147,7 +153,8 @@ class SmoothNN:
                     reg_strength=reg_strength,
                     num_epochs=num_epochs,
                     verbose=verbose,
-                    display=display)
+                    display=display,
+                    gradient_check=gradient_check)
 
     def refine(self, 
             X_train, y_train, 
@@ -156,7 +163,8 @@ class SmoothNN:
             reg_strength=None,
             num_epochs=15,
             verbose=True,
-            display=True):
+            display=True,
+            gradient_check=False):
         """Fits the neural network to the data.
         
         Args:
@@ -192,6 +200,10 @@ class SmoothNN:
         start_epoch = self._epoch
         end_epoch = self._epoch + num_epochs
 
+        if gradient_check:
+            self._gradient_check(X_train, y_train)
+            return
+            
         # go through the epochs
         for epoch in range(start_epoch, end_epoch):
             
@@ -221,6 +233,65 @@ class SmoothNN:
             self._epoch += 1
 
         plt.close()
+    
+    def _prop_check(self, X_train, y_train):
+        """Use to check if propagation implemented correctly"""
+        self._set_epoch_dropout_masks()
+
+        self.learning_rate = self._learning_scheduler.get_learning_rate(0)
+
+        n = len(X_train)
+
+        start_idx = 0
+        end_idx = min(start_idx + self.batch_size, n)
+
+        # locate relevant fields to 
+        X_train_batch = X_train[start_idx:end_idx]
+        y_train_batch = y_train[start_idx:end_idx]
+
+        forward_cache_batch = self._forward_prop(X_train_batch)
+
+        for layer in range(self.num_layers):
+            if self.layers[layer]["batch_norm"]:
+                self.expo_norm_dict[f"inf_mean{layer}"] = forward_cache_batch[f"batch_mean{layer}"] 
+                self.expo_norm_dict[f"inf_var{layer}"] = forward_cache_batch[f"batch_var{layer}"]
+
+        assert np.allclose(forward_cache_batch[f"a{self.num_layers-1}"], self.predict_prob(X_train_batch))
+
+        grad_dict = self._backward_prop(X_train_batch, y_train_batch, forward_cache_batch)
+
+        ## check if forward prop and predict prob yield the same values
+
+        # params have not been updated yet
+        eps = 1e-7
+        grad_approx_dict = {}
+
+        for layer in range(self.num_layers-1,0,-1):
+            
+            if self.layers[layer]["batch_norm"]:
+                param_names = ["scale", "shift", "W"]
+            else:
+                param_names = ["b", "W"]
+            for param_name in param_names:
+                param_vals = self.params[f"{param_name}{layer}"]
+
+                grad_approx = np.zeros(param_vals.shape)
+                with np.nditer(param_vals, flags=['multi_index'], op_flags=['readwrite']) as it:
+                    for x in it:
+                        x[...] = x + eps
+                        J_plus = self.avg_loss(X_train_batch,y_train_batch)
+                        x[...] = x - 2 * eps
+                        J_minus = self.avg_loss(X_train_batch,y_train_batch)
+                        x[...] = x + eps
+                        grad_approx[it.multi_index] = (J_plus - J_minus) / (2 * eps)
+                gradient = grad_dict[f"{param_name}{layer}"] 
+                num = np.linalg.norm(gradient - grad_approx)
+                denom = np.linalg.norm(gradient) + np.linalg.norm(grad_approx)
+                difference = num / denom
+                if difference > 2e-7:
+                    print(f"WARNING: difference for {param_name}{layer} is {difference}")
+                else:
+                    print(f"OK: difference for {param_name}{layer} is {difference}")
 
     def _val_structure(self):
         """validate the structure of the the NN"""
@@ -243,16 +314,26 @@ class SmoothNN:
         for layer_idx in range(1,self.num_layers):
             input_size = self.layers[layer_idx - 1]["size"]
             output_size = self.layers[layer_idx]["size"]
+            batch_norm = self.layers[layer_idx]["batch_norm"]
             
             layer_activation = self.layers[layer_idx]["activation"]
 
             if isinstance(layer_activation, (node_funcs.ReLU, node_funcs.LeakyReLU)):
-                factor = 2 / input_size
+                factor = 2
             else:
-                factor = 1 / input_size
+                factor = 1
 
-            self.params[f"W{layer_idx}"] = np.random.normal(size=(input_size, output_size)) * np.sqrt(factor)
-            self.params[f"b{layer_idx}"] = np.zeros(shape=output_size)
+            self.params[f"W{layer_idx}"] = np.random.normal(size=(input_size, output_size)) * np.sqrt(factor / input_size)
+
+            if batch_norm:
+                # scale and shift
+                self.params[f"scale{layer_idx}"] = np.random.normal(size=output_size) * np.sqrt(1 / output_size)
+                self.params[f"shift{layer_idx}"] = np.zeros(shape=output_size)
+                # inference params for normalization
+                self.expo_norm_dict[f"inf_mean{layer_idx}"] = np.zeros(shape=output_size)
+                self.expo_norm_dict[f"inf_var{layer_idx}"] = np.zeros(shape=output_size)
+            else:
+                self.params[f"b{layer_idx}"] = np.zeros(shape=output_size)
 
     def _gradient_descent_epoch(self, X_train, y_train):
         """Performs one epoch of gradient descent to update the params dictionary
@@ -263,6 +344,7 @@ class SmoothNN:
         
         """
 
+        # new epoch masks every epoch
         self._set_epoch_dropout_masks()
 
         n = len(X_train)
@@ -304,19 +386,18 @@ class SmoothNN:
         """forward propagation, backward propagation and parameter updates for gradient descent"""
         #time3 = time.time()
         # forward pass
-        node_vals_batch = self._forward_prop(X_train_batch)
+        forward_cache_batch = self._forward_prop(X_train_batch)
         # time4 = time.time()
         # print(f"Time for forward: {time4-time3}")
 
         # perform back prop to obtain gradients
-        grad_dict = self._backward_prop(X_train_batch, y_train_batch, node_vals_batch)
+        grad_dict = self._backward_prop(X_train_batch, y_train_batch, forward_cache_batch)
         
         #time5 = time.time()
         #print(f"time for backwards {time5-time4}")
 
         # update params
         for param in self.params:
-
             gradient = grad_dict[param]
 
             if isinstance(gradient, no_resources.RowSparseArray):
@@ -349,21 +430,40 @@ class SmoothNN:
             web_idx = layer + 1
 
             activation_func = self.layers[web_idx]["activation"]
-            W = self.params[f"W{web_idx}"]
-            b = self.params[f"b{web_idx}"]
             a_behind = forward_cache[f"a{layer}"]
-            forward_cache[f"z{web_idx}"] = a_behind @ W + b
+            W = self.params[f"W{web_idx}"]
+            
+            batch_norm = self.layers[web_idx]["batch_norm"]
+            
+            if batch_norm:
+                # find mean and std of the batch
+                raw_z = forward_cache[f"z{web_idx}"] = a_behind @ W
+                batch_mean = forward_cache[f"batch_mean{web_idx}"] = raw_z.mean(axis=0)
+                batch_var = forward_cache[f"batch_var{web_idx}"] = raw_z.var(axis=0)
+                scale = self.params[f"scale{web_idx}"]
+                shift = self.params[f"shift{web_idx}"]
+                # update layer inference mean and var
+                self.expo_norm_dict[f"inf_mean{web_idx}"] = .9 * self.expo_norm_dict[f"inf_mean{web_idx}"] + .1 * batch_mean
+                self.expo_norm_dict[f"inf_var{web_idx}"] = .9 * self.expo_norm_dict[f"inf_var{web_idx}"] + .1 * batch_var
+
+                # normalize
+                z_hat = forward_cache[f"z_hat{web_idx}"] = (raw_z - batch_mean) / np.sqrt(batch_var + self._stable_constant)
+                # scale and shift (and cache)
+                activation_input = forward_cache[f"y{web_idx}"] = scale * z_hat + shift
+            else:
+                b = self.params[f"b{web_idx}"]
+                activation_input = forward_cache[f"z{web_idx}"] = a_behind @ W + b
 
             keep_prob = self.layers[web_idx]["keep_prob"]
 
             # handle dropout conditions
             if keep_prob == 1.0:
-                forward_cache[f"a{web_idx}"] = activation_func.forward(forward_cache[f"z{web_idx}"])
+                forward_cache[f"a{web_idx}"] = activation_func.forward(activation_input)
             else:
                 #dropout_mask = (np.random.rand(1, self.layers[web_idx]["size"]) < keep_prob).astype(int)
                 dropout_mask = self._epoch_dropout_masks[f"d{web_idx}"]
                 forward_cache[f"d{web_idx}"] = dropout_mask
-                forward_cache[f"a{web_idx}"] = (activation_func.forward(forward_cache[f"z{web_idx}"]) * dropout_mask) / keep_prob
+                forward_cache[f"a{web_idx}"] = (activation_func.forward(activation_input) * dropout_mask) / keep_prob
     
         return forward_cache
 
@@ -384,10 +484,15 @@ class SmoothNN:
         for layer in range(self.num_layers-1,0,-1):
 
             #time0_1 = time.time()
+            batch_norm = self.layers[layer]["batch_norm"]
+
             # get the node precursors (z's) and activation values
             a_behind = forward_cache[f"a{layer-1}"]
             a_ahead = forward_cache[f"a{layer}"]
-            z_ahead = forward_cache[f"z{layer}"]
+            if batch_norm:
+                activation_input = forward_cache[f"y{layer}"]
+            else:
+                activation_input = forward_cache[f"z{layer}"]
             activation = self.layers[layer]["activation"]
 
             W = self.params[f"W{layer}"]
@@ -397,7 +502,7 @@ class SmoothNN:
                 dJ_dz_ahead = self.loss.backward(a_ahead, y)
             else: # move gradient backward
                 dJ_da_ahead = dJ_dz_past @ W_ahead.T
-                da_dz_ahead = activation.backward(z_ahead)
+                da_dz_ahead = activation.backward(activation_input) # this is the problem, yes, should be y when batch prob
 
                 keep_prob = self.layers[layer]["keep_prob"]
 
@@ -407,7 +512,26 @@ class SmoothNN:
                     #dropout_mask = forward_cache[f"d{layer}"]
                     dropout_mask = self._epoch_dropout_masks[f"d{layer}"]
                     dJ_dz_ahead = (dJ_da_ahead * da_dz_ahead * dropout_mask) / keep_prob
+    
+            if batch_norm:
+                # retrieve values
+                z_hat = forward_cache[f"z_hat{layer}"]
+                raw_z = forward_cache[f"z{layer}"]
+                batch_mean = forward_cache[f"batch_mean{layer}"]
+                batch_var = forward_cache[f"batch_var{layer}"]
+                scale = self.params[f"scale{layer}"]
+                shift = self.params[f"shift{layer}"]
 
+                # set scale and shift grads
+                # shallow copy dJ_dz_ahead to proper name dJ_dy
+                dJ_dy = dJ_dz_ahead
+                grad_dict[f"scale{layer}"] = np.mean(dJ_dy * z_hat, axis=0)
+                grad_dict[f"shift{layer}"] = np.mean(dJ_dy, axis=0)
+
+                # find original input gradient and loss 
+                dJ_dz_hat = dJ_dy * scale
+                dJ_dz_ahead = (n * dJ_dz_hat - np.sum(dJ_dz_hat, axis=0) - z_hat * np.sum(dJ_dz_hat * z_hat, axis=0)) / (n * np.sqrt(batch_var + self._stable_constant))
+            
             #time0_3 = time.time()
 
             # cases for efficiency, for regularization, operating on large W matrix (even with reg strength of 0) is time expensive
@@ -416,7 +540,8 @@ class SmoothNN:
             else:
                 grad_dict[f"W{layer}"] = a_behind.T @ (dJ_dz_ahead / n) + 2 * self.reg_strength * W
 
-            grad_dict[f"b{layer}"] = dJ_dz_ahead.mean(axis=0)
+            if not batch_norm:
+                grad_dict[f"b{layer}"] = dJ_dz_ahead.mean(axis=0)
 
             #time0_4 = time.time()
             #print(f"Time for grad dict calc {time0_4-time0_3}")
@@ -464,10 +589,24 @@ class SmoothNN:
 
             activation_func = self.layers[web_idx]["activation"]
             W = self.params[f"W{web_idx}"]
-            b = self.params[f"b{web_idx}"]
+            
+            batch_norm = self.layers[web_idx]["batch_norm"]
 
-            cur_z = a_behind @ W + b
-            cur_a = activation_func.forward(cur_z)
+            if batch_norm:
+                # retrieve values
+                inf_mean = self.expo_norm_dict[f"inf_mean{web_idx}"]
+                inf_var = self.expo_norm_dict[f"inf_var{web_idx}"]
+                scale = self.params[f"scale{web_idx}"]
+                shift = self.params[f"shift{web_idx}"]
+                # push forward
+                raw_z = a_behind @ W
+                z_hat = (raw_z - inf_mean) / np.sqrt(inf_var + self._stable_constant)
+                activation_input = scale * z_hat + shift
+            else:
+                b = self.params[f"b{web_idx}"]
+                activation_input = a_behind @ W + b
+
+            cur_a = activation_func.forward(activation_input)
 
             a_behind = cur_a
 
