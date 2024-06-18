@@ -9,6 +9,8 @@ import warnings
 import traceback
 import random
 from contextlib import ExitStack
+import queue 
+import threading
 
 from . import utils
 
@@ -347,10 +349,15 @@ class Chunk:
     def generate_input_data(self):
         """Generate X_data input"""
         return self.generate_raw_jar_data(self._input_flag, self._input_jar, self._input_skiprows, self._data_input_selector)
-    
+
     def generate_output_data(self):
         """Generate X_data input"""
         return self.generate_raw_jar_data(self._output_flag, self._output_jar, self._output_skiprows, self._data_output_selector, ndmin=2)
+
+    def build_queue(self, q_to_build, generator):
+        for data in generator:
+            q_to_build.put(data)
+        q_to_build.put(None)
 
     def generate_raw_jar_data(self, set_flag, jar_opener, skiprows, data_selector, ndmin=0):
         """Generate raw jar data without transforming into OneHotArray for input or one hot vector for output data
@@ -395,6 +402,42 @@ class Chunk:
                 yield data
 
     def generate(self):
+        """threaded generation, minimal speed increase"""
+        input_queue = queue.Queue(maxsize=10)
+        output_queue = queue.Queue(maxsize=10)
+
+        input_thread = threading.Thread(target=self.build_queue, args=(input_queue, self.generate_input_data()), daemon=True)
+        output_thread = threading.Thread(target=self.build_queue, args=(output_queue, self.generate_output_data()), daemon=True)
+        input_thread.start()
+        output_thread.start()
+
+        while True:
+            X_data = input_queue.get()
+            y_data = output_queue.get()
+
+            if X_data is None and y_data is None:
+                break
+
+            if len(X_data) != len(y_data):
+                raise Exception("Input file and output file are not the same length")
+            
+            if self._sparse_dim:
+                X_data = OneHotArray(shape=(len(X_data),self._sparse_dim),idx_array=X_data)
+
+            if self._one_hot_width:
+                y_data = self.one_hot_labels(y_data)
+
+            if self._standardize:
+                if self._train_chunk or self._linked_chunk:
+                    X_data = (X_data - self._train_mean) / self._train_std
+                    #X_data = (X_data - 33.3183) / 78.567
+
+            yield X_data, y_data
+
+        input_thread.join()
+        output_thread.join()
+            
+    def generate2(self):
         # yield is weird here will have to check this out
         for X_data, y_data in zip(self.generate_input_data(), self.generate_output_data()):
 

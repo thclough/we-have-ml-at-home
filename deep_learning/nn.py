@@ -836,15 +836,15 @@ class ChunkNN(SmoothNN):
             # set a seed for sampling batches for loss
             np.random.seed(self._batch_seed)
 
-            #start_gen = time.time()
+            start_gen = time.time()
             for X_train, y_train in train_chunk.generate():
-                #end_gen = time.time()
-                #print(f"gen time {end_gen-start_gen}")
+                end_gen = time.time()
+                print(f"gen time {end_gen-start_gen}")
 
-                #start_batch = time.time()
+                start_batch = time.time()
                 super()._batch_total_pass(X_train, y_train)
-                #end_batch = time.time()
-                #print(f"batch time: {end_batch-start_batch}")
+                end_batch = time.time()
+                print(f"batch time: {end_batch-start_batch}")
 
                 if verbose:
                     if np.random.binomial(1, self._batch_prob):
@@ -852,7 +852,7 @@ class ChunkNN(SmoothNN):
 
                         print(f"\t Sampled batch loss: {sampled_batch_loss}")
                 
-                #start_gen = time.time()
+                start_gen = time.time()
 
             epoch_end_time = time.time()
 
