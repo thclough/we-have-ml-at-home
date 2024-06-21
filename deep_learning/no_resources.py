@@ -402,6 +402,7 @@ class Chunk:
                 yield data
 
     def generate(self):
+
         """threaded generation, minimal speed increase"""
         input_queue = queue.Queue(maxsize=10)
         output_queue = queue.Queue(maxsize=10)
@@ -597,7 +598,9 @@ class SuperChunk(Chunk):
 
     def _set_training_data_mean(self):
         # set the seed
-        np.random.seed(self.seed)
+        #np.random.seed(self.seed)
+
+        rng = np.random.default_rng(self.seed)
 
         train_sum = np.zeros(self.input_dim)
         train_count = 0
@@ -605,7 +608,7 @@ class SuperChunk(Chunk):
         for X_data in self.generate_input_data():
             data_len = X_data.shape[0]
 
-            train_idxs, _, _ = self.get_tdt_idxs(data_len)
+            train_idxs, _, _ = self.get_tdt_idxs(data_len, rng)
 
             X_train = X_data[train_idxs]
 
@@ -616,7 +619,9 @@ class SuperChunk(Chunk):
 
     def _set_training_data_std(self):
         # set the seed
-        np.random.seed(self.seed)
+        #np.random.seed(self.seed)
+
+        rng = np.random.default_rng(self.seed)
 
         sum_dev_sqd = np.zeros(self.input_dim)
         train_count = 0
@@ -624,7 +629,7 @@ class SuperChunk(Chunk):
         for X_data in self.generate_input_data():
             data_len = X_data.shape[0]
 
-            train_idxs, _, _ = self.get_tdt_idxs(data_len)
+            train_idxs, _, _ = self.get_tdt_idxs(data_len, rng)
 
             X_train = X_data[train_idxs]
 
@@ -635,28 +640,31 @@ class SuperChunk(Chunk):
 
     def generate(self):
         # set the seed
-        np.random.seed(self.seed)
-        batch_min = 1000
-        batch_num=0
+        #batch_num = 0
+        #np.random.seed(self.seed)
+
+        rng = np.random.default_rng(self.seed)
         for X_data, y_data in super().generate():
-            if batch_num <= batch_min:
-                train_idxs, dev_idxs, test_idxs = self.get_tdt_idxs(X_data.shape[0])
+            
+            train_idxs, dev_idxs, test_idxs = self.get_tdt_idxs(X_data.shape[0], rng)
 
-                X_train = X_data[train_idxs]
-                y_train = y_data[train_idxs]
+            # if batch_num == 1:
+            #     print(dev_idxs)
 
-                X_dev = X_data[dev_idxs]
-                y_dev = y_data[dev_idxs]
-                
-                X_test = X_data[test_idxs]
-                y_test = y_data[test_idxs]
+            X_train = X_data[train_idxs]
+            y_train = y_data[train_idxs]
 
-                yield X_train, y_train, X_dev, y_dev, X_test, y_test
-            else:
-                break
-            batch_num +=1
+            X_dev = X_data[dev_idxs]
+            y_dev = y_data[dev_idxs]
+            
+            X_test = X_data[test_idxs]
+            y_test = y_data[test_idxs]
 
-    def get_tdt_idxs(self, data_length):
+            yield X_train, y_train, X_dev, y_dev, X_test, y_test
+            #batch_num += 1
+
+
+    def get_tdt_idxs(self, data_length, rng):
         """Retrieve indexes of train, dev, and test set for data of given length
         
         Args:
@@ -669,7 +677,8 @@ class SuperChunk(Chunk):
         
         """
 
-        shuffled_idxs = np.random.permutation(data_length)
+        shuffled_idxs = rng.permutation(data_length)
+        #shuffled_idxs = list(range(data_length))
 
         train_share = self.tdt_sizes[0]
         dev_share = self.tdt_sizes[1]

@@ -36,6 +36,9 @@ class SmoothNN:
         self._batch_sizes = []
         self._has_fit = False
         self.num_layers = 0
+
+        self.has_dropout = False
+
         self._loaded_model=False
         self.loss=None
         self._stable_constant=10e-8
@@ -83,6 +86,9 @@ class SmoothNN:
                 raise Exception("Dropout cannot be applied to the input layer")
             if batch_norm:
                 raise Exception("Cannot batch normalize input layer")
+            
+        if keep_prob != 1:
+            self.has_dropout = True
 
         # append layer to the layers list
         self.layers.append({"size": layer_size, "activation": activation, "loss":loss, "keep_prob":keep_prob, "batch_norm":batch_norm})
@@ -344,8 +350,9 @@ class SmoothNN:
         
         """
 
-        # new epoch masks every epoch
-        self._set_epoch_dropout_masks()
+        if self.has_dropout:
+            # new epoch masks every epoch
+            self._set_epoch_dropout_masks()
 
         n = len(X_train)
 
@@ -371,7 +378,7 @@ class SmoothNN:
         but also differ from epoch to epoch"""
 
         # set random seed for consistency
-        np.random.seed(seed+self._epoch)
+        mask_rng = np.random.default_rng(seed+self._epoch)
 
         self._epoch_dropout_masks = {}
 
@@ -380,7 +387,7 @@ class SmoothNN:
 
             # set a dropout mask between 
             if keep_prob != 1.0:
-                self._epoch_dropout_masks[f"d{hidden_layer}"] = (np.random.rand(1, self.layers[hidden_layer]["size"]) < keep_prob).astype(int)
+                self._epoch_dropout_masks[f"d{hidden_layer}"] = (mask_rng.random(self.layers[hidden_layer]["size"]) < keep_prob).astype(int)
 
     def _batch_total_pass(self, X_train_batch, y_train_batch):
         """forward propagation, backward propagation and parameter updates for gradient descent"""
@@ -831,7 +838,8 @@ class ChunkNN(SmoothNN):
             self._reg_strengths.append(self.reg_strength)
             self._batch_sizes.append(batch_size)
 
-            super()._set_epoch_dropout_masks(seed=self._batch_seed)
+            if self.has_dropout:
+                super()._set_epoch_dropout_masks(seed=self._batch_seed)
 
             # set a seed for sampling batches for loss
             np.random.seed(self._batch_seed)
@@ -862,7 +870,7 @@ class ChunkNN(SmoothNN):
             # record costs after each epoch gap
             if epoch % epoch_gap == 0:
                 gap_start_time = time.time()
-
+                
                 epoch_train_cost = self.chunk_loss(self.train_chunk)
                 self._train_costs.append(epoch_train_cost)
                 if verbose:
@@ -1079,7 +1087,6 @@ class SuperChunkNN(SmoothNN):
         end_epoch = self._epoch + num_epochs
 
         for epoch in range(start_epoch, end_epoch):
-
             print(f"Epoch: {epoch}")
             epoch_start_time = time.time()
 
@@ -1090,9 +1097,11 @@ class SuperChunkNN(SmoothNN):
             self._reg_strengths.append(self.reg_strength)
             self._batch_sizes.append(batch_size)
 
-            super()._set_epoch_dropout_masks(seed=super_chunk.seed)
+            if self.has_dropout:
+                super()._set_epoch_dropout_masks(seed=super_chunk.seed)
 
             #start_time = time.time()
+            rng2 = np.random.default_rng(super_chunk.seed)
             for X_train, y_train, _, _, _, _ in self.super_chunk.generate():
                 
                 super()._batch_total_pass(X_train, y_train)
@@ -1101,7 +1110,7 @@ class SuperChunkNN(SmoothNN):
                 #print(f"Time for loop {end_time-start_time}")
 
                 if verbose:
-                    if np.random.binomial(1, self._batch_prob):
+                    if rng2.binomial(1, self._batch_prob):
                         sampled_batch_loss = super().avg_loss(X_train, y_train)
 
                         print(f"\t Sampled batch loss: {sampled_batch_loss}")
