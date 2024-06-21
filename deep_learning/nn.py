@@ -318,7 +318,7 @@ class SmoothNN:
             
             layer_activation = self.layers[layer_idx]["activation"]
 
-            if isinstance(layer_activation, (node_funcs.ReLU, node_funcs.LeakyReLU)):
+            if isinstance(layer_activation, (node_funcs.ReLU, node_funcs.LeakyReLU)): 
                 factor = 2
             else:
                 factor = 1
@@ -836,23 +836,24 @@ class ChunkNN(SmoothNN):
             # set a seed for sampling batches for loss
             np.random.seed(self._batch_seed)
 
-            start_gen = time.time()
+            #start_gen = time.time()
             for X_train, y_train in train_chunk.generate():
-                end_gen = time.time()
-                print(f"gen time {end_gen-start_gen}")
+                #end_gen = time.time()
+                #print(f"gen time {end_gen-start_gen}")
 
-                start_batch = time.time()
+                #start_batch = time.time()
                 super()._batch_total_pass(X_train, y_train)
-                end_batch = time.time()
-                print(f"batch time: {end_batch-start_batch}")
-
+                #end_batch = time.time()
+                #print(f"batch time: {end_batch-start_batch}")
+                
                 if verbose:
+                    
                     if np.random.binomial(1, self._batch_prob):
                         sampled_batch_loss = super().avg_loss(X_train, y_train)
 
                         print(f"\t Sampled batch loss: {sampled_batch_loss}")
                 
-                start_gen = time.time()
+                #start_gen = time.time()
 
             epoch_end_time = time.time()
 
@@ -936,7 +937,7 @@ class ChunkNN(SmoothNN):
 
         return accuracy
     
-    def chunk_report(self, eval_chunk):
+    def class_report(self, eval_chunk):
         """Create classification matrix for the given chunk.
         
         Args:
@@ -980,7 +981,11 @@ class ChunkNN(SmoothNN):
 
             report[report_idx] = pair_count
 
-        return sorted_labels_key, report
+        precisions = report.diagonal() / report.sum(axis=0)
+        recalls = report.diagonal() / report.sum(axis=1)
+        f1s = (2 * precisions * recalls) / (precisions + recalls + self._stable_constant)
+
+        return sorted_labels_key, report, f1s
 
 class SuperChunkNN(SmoothNN):
     """NN class for SuperChunk iterator for large datasets
@@ -1040,7 +1045,6 @@ class SuperChunkNN(SmoothNN):
             reg_strength=None,
             num_epochs=15,
             epoch_gap=5,
-            batch_prob=.01,
             model_path=None,
             display_path=None,
             verbose=True, 
@@ -1081,22 +1085,23 @@ class SuperChunkNN(SmoothNN):
 
             # update learning rate
             self.learning_rate = self._learning_scheduler.get_learning_rate(epoch)
-            #start_time = time.time()
+            
             self._learning_rates.append(self.learning_rate)
             self._reg_strengths.append(self.reg_strength)
             self._batch_sizes.append(batch_size)
 
             super()._set_epoch_dropout_masks(seed=super_chunk.seed)
 
+            #start_time = time.time()
             for X_train, y_train, _, _, _, _ in self.super_chunk.generate():
-
+                
                 super()._batch_total_pass(X_train, y_train)
 
                 #end_time = time.time()
                 #print(f"Time for loop {end_time-start_time}")
 
                 if verbose:
-                    if np.random.binomial(1, batch_prob):
+                    if np.random.binomial(1, self._batch_prob):
                         sampled_batch_loss = super().avg_loss(X_train, y_train)
 
                         print(f"\t Sampled batch loss: {sampled_batch_loss}")
@@ -1155,6 +1160,7 @@ class SuperChunkNN(SmoothNN):
         dev_length = 0
 
         for X_train, y_train, X_dev, y_dev, _, _ in self.super_chunk.generate():
+            
             y_train_probs = super().predict_prob(X_train)
             
             chunk_train_loss_sum = np.sum(self.loss.forward(y_train_probs, y_train))
@@ -1163,7 +1169,7 @@ class SuperChunkNN(SmoothNN):
             train_loss_sum += chunk_train_loss_sum
             train_length += chunk_train_length
             
-            if self._dev_flag:
+            if self._dev_flag and len(X_dev) > 0:
                 y_dev_probs = super().predict_prob(X_dev)
                 chunk_dev_loss_sum = np.sum(self.loss.forward(y_dev_probs, y_dev))
                 chunk_dev_length = X_dev.shape[0]
@@ -1177,15 +1183,11 @@ class SuperChunkNN(SmoothNN):
         else:
             dev_cost = None
 
-        print("train and dev lengths")
-        print(train_length, dev_length)
-
         return train_cost, dev_cost
 
-    def tdt_report(self):
+    def class_report(self):
         """Create train, dev, and test set classification matrices. 
        
-
         Returns:
             sorted_labels_key (dict) : {label value : idx} dictionary key for matrices
                 True labels along 0 axis and predicted labels along 1st axis
@@ -1202,20 +1204,26 @@ class SuperChunkNN(SmoothNN):
 
         for data in self.super_chunk.generate():
             X_train, y_train, X_dev, y_dev, X_test, y_test = data
-
+            
             # calculate activation values for each layer (includes predicted values)
             y_pred_train = super().predict_labels(X_train)
-            y_pred_dev = super().predict_labels(X_dev)
-            y_pred_test = super().predict_labels(X_test)
-            
             if not isinstance(self.loss, node_funcs.BCE):
                 y_train = np.argmax(y_train,axis=1)
-                y_dev = np.argmax(y_dev,axis=1)
-                y_test = np.argmax(y_test,axis=1)
 
-            set_args = [(train_report_dict, y_train, y_pred_train),
-                        (dev_report_dict, y_dev, y_pred_dev),
-                        (test_report_dict, y_test, y_pred_test)]
+            set_args = [(train_report_dict, y_train, y_pred_train)]
+            if len(X_dev) > 0:
+                y_pred_dev = super().predict_labels(X_dev)
+                if not isinstance(self.loss, node_funcs.BCE):
+                    y_dev = np.argmax(y_dev,axis=1)
+            
+                set_args.append((dev_report_dict, y_dev, y_pred_dev))
+
+            if len(X_test) > 0:
+                y_pred_test = super().predict_labels(X_test)
+                if not isinstance(self.loss, node_funcs.BCE):
+                    y_test = np.argmax(y_test,axis=1)
+            
+                set_args.append((test_report_dict, y_test, y_pred_test))
 
             for report_dict, true_labels, pred_labels in set_args:
                 for true_label, pred_label in zip(true_labels, pred_labels):
@@ -1243,8 +1251,14 @@ class SuperChunkNN(SmoothNN):
                 report[report_idx] = pair_count
 
             reports.append(report)
+        
+        f1s = []
+        for report in reports:
+            precisions = report.diagonal() / report.sum(axis=0)
+            recalls = report.diagonal() / report.sum(axis=1)
+            f1s.append((2 * precisions * recalls) / (precisions + recalls + self._stable_constant))
 
-        return sorted_labels_key, reports
+        return sorted_labels_key, reports, f1s
             
     def accuracy(self):
         """Evaluate accuracy efficiently

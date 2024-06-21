@@ -636,20 +636,25 @@ class SuperChunk(Chunk):
     def generate(self):
         # set the seed
         np.random.seed(self.seed)
-
+        batch_min = 1000
+        batch_num=0
         for X_data, y_data in super().generate():
-            train_idxs, dev_idxs, test_idxs = self.get_tdt_idxs(X_data.shape[0])
+            if batch_num <= batch_min:
+                train_idxs, dev_idxs, test_idxs = self.get_tdt_idxs(X_data.shape[0])
 
-            X_train = X_data[train_idxs]
-            y_train = y_data[train_idxs]
+                X_train = X_data[train_idxs]
+                y_train = y_data[train_idxs]
 
-            X_dev = X_data[dev_idxs]
-            y_dev = y_data[dev_idxs]
+                X_dev = X_data[dev_idxs]
+                y_dev = y_data[dev_idxs]
+                
+                X_test = X_data[test_idxs]
+                y_test = y_data[test_idxs]
 
-            X_test = X_data[test_idxs]
-            y_test = y_data[test_idxs]
-
-            yield X_train, y_train, X_dev, y_dev, X_test, y_test
+                yield X_train, y_train, X_dev, y_dev, X_test, y_test
+            else:
+                break
+            batch_num +=1
 
     def get_tdt_idxs(self, data_length):
         """Retrieve indexes of train, dev, and test set for data of given length
@@ -696,8 +701,8 @@ class SuperChunk(Chunk):
 
         if train_share == 0:
             raise AttributeError("Training share must be greater than 0")
-
-        if val_list.sum() != 1:
+        
+        if not np.isclose(val_list.sum(), 1):
             raise AttributeError("tdt split must sum to 1")
     
         self._tdt_sizes = tdt_tuple_cand
