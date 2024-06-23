@@ -177,8 +177,48 @@ class Loss:
 # EFFICIENCY LAYERS
 
 class Dropout:
+    
+    learnable = False
 
-    pass
+    def __init__(self, keep_prob, input_shape=None, seed=100):
+        
+        # validate the keep prob
+        self._val_keep_prob(keep_prob)
+
+        self._keep_prob = keep_prob
+        self._seed = seed
+
+        self._epoch_dropout_mask = None
+
+        self.input_shape = input_shape
+
+    @staticmethod
+    def _val_keep_prob(keep_prob):
+        if keep_prob <=0 or keep_prob >= 1:
+            raise ValueError("keep prob must be between 0 and 1 exclusive")
+
+    def set_epoch_dropout_mask(self, epoch):
+        """Create masks for the epoch so masks can stay consistent throughout an epoch, 
+        but also differ from epoch to epoch"""
+
+        mask_rng = np.random.default_rng(self._seed+epoch)
+
+        self._epoch_dropout_mask = (mask_rng.random(self.input_shape) < self._keep_prob).astype(int)
+
+    def advance(self, input, cache=True):
+        if cache:
+            output = (input * self._epoch_dropout_mask) / self._keep_prob
+            return output
+        else:
+            return input
+        
+
+    def back_up(self, output_grad_to_loss):
+        
+        input_grad_to_loss = (output_grad_to_loss * self._epoch_dropout_mask) / self._keep_prob
+
+        return input_grad_to_loss
+        
 
 class BatchNorm:
     learnable = True

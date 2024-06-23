@@ -21,6 +21,7 @@ class ChunkNN:
         self._batch_sizes = []
 
         self._has_fit = False
+        self._has_dropout = False
         self._loaded_model = False
 
         self._stable_constant = 10e-8
@@ -31,22 +32,25 @@ class ChunkNN:
             raise Exception("Cannot add another layer after Loss layer")
 
         if len(self.layers) == 0:
-            if isinstance(layer_object, nn_layers.Web):
+            if isinstance(layer_object, (nn_layers.Web, nn_layers.Dropout)):
                 if layer_object.input_shape is None:
-                    raise Exception("First layer Web input shape must be set")
+                    raise Exception("First layer input shape must be set in layer")
                 
-                self._last_output_shape = layer_object.output_shape
+                if isinstance(layer_object, (nn_layers.Web)):
+                    self._last_output_shape = layer_object.output_shape
             else:
                 raise Exception("First layers must be a web layer")
 
         if len(self.layers) > 0:
-            if isinstance(layer_object, nn_layers.Web):
+            if isinstance(layer_object, (nn_layers.Web, nn_layers.Dropout)):
                 if layer_object.input_shape is not None:
                     if layer_object.input_shape != self._last_output_shape:
-                        raise Exception("Web input shape must equal the output shape of the last web")
+                        raise Exception("Input shape must equal the output shape of the last web")
                 else:
                     layer_object.input_shape = self._last_output_shape
-                self._last_output_shape = layer_object.output_shape
+                
+                if isinstance(layer_object, (nn_layers.Web)):
+                    self._last_output_shape = layer_object.output_shape
 
             if isinstance(self.layers[-1], nn_layers.Web):
                 self.layers[-1].output_layer = layer_object
@@ -63,6 +67,9 @@ class ChunkNN:
                     raise Exception("Should use cross entropy loss for multi-class classification, increase layer-size or use BCE")
 
             self.loss_layer = layer_object
+        
+        if isinstance(layer_object, nn_layers.Dropout):
+            self._has_dropout = True
 
         self.layers.append(layer_object)
             
@@ -75,11 +82,17 @@ class ChunkNN:
             if layer.learnable:
                 layer.initialize_params()
 
+    def _set_epoch_dropout_masks(self, epoch):
+
+        for layer in self.layers:
+            if isinstance(layer, nn_layers.Dropout):
+                layer.set_epoch_dropout_mask(epoch)
+
     def fit(self,
             train_chunk,
             dev_chunk=None,
             learning_scheduler=learning_funcs.ConstantRate(1),
-            reg_strength=0.0001,
+            reg_strength=0,
             num_epochs=30,
             epoch_gap=5,
             batch_prob=.01,
@@ -190,8 +203,8 @@ class ChunkNN:
             self._reg_strengths.append(self.reg_strength)
             self._batch_sizes.append(batch_size)
 
-            # if self.has_dropout:
-            #     self._set_epoch_dropout_masks(seed=self._batch_seed)
+            if self._has_dropout:
+                self._set_epoch_dropout_masks(epoch=epoch)
 
             # set a seed for sampling batches for loss
             rng2 = np.random.default_rng(self._batch_seed)
@@ -223,7 +236,9 @@ class ChunkNN:
                 
                 epoch_train_cost = self.chunk_cost(self.train_chunk)
                 self._train_costs.append(epoch_train_cost)
+
                 if verbose:
+                    
                     print(f"\t Training cost: {epoch_train_cost}")
 
                 if self._dev_flag:
@@ -238,7 +253,7 @@ class ChunkNN:
                     self._update_epoch_plot(fig, ax, epoch, end_epoch)
 
                 gap_end_time = time.time()
-                
+
                 if verbose:
                     print(f"Gap completion time: {(gap_end_time-gap_start_time) / 3600} Hours")
             else:
