@@ -332,7 +332,7 @@ class SmoothNN:
                 factor = 2
             else:
                 factor = 1
-
+            
             self.params[f"W{layer_idx}"] = np.random.normal(size=(input_size, output_size)) * np.sqrt(factor / input_size)
 
             if batch_norm:
@@ -777,6 +777,7 @@ class ChunkNN(SmoothNN):
         # get the initial weights and biases
         if verbose:
             print("WARNING: Creating new set of params")
+
         super()._get_initial_params()
 
         self.refine(train_chunk=train_chunk,

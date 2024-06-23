@@ -60,11 +60,11 @@ class Web:
 
         return input @ self._weights + self._bias
 
-    def back_up(self, output_grad_to_loss, update_params_flag=True, learning_rate=.003, reg_strength=0):
+    def back_up(self, output_grad_to_loss, learning_rate, reg_strength, update_params_flag=True):
         
         if update_params_flag and self.input is not None:
             
-            weights_grad_to_loss = self._calc_weights_grads(output_grad_to_loss)
+            weights_grad_to_loss = self._calc_weights_grads(output_grad_to_loss, reg_strength=reg_strength)
             self._update_param(self._weights, weights_grad_to_loss, learning_rate)
 
             bias_grad_to_loss = self._calc_bias_grads(output_grad_to_loss)
@@ -79,11 +79,14 @@ class Web:
     
     # CALCULATE GRADIENTS
     
-    def _calc_weights_grads(self, output_grad_to_loss):
+    def _calc_weights_grads(self, output_grad_to_loss, reg_strength):
 
         m = len(self.input)
 
-        weights_grad_to_loss = self.input.T @ (output_grad_to_loss / m)
+        if reg_strength != 0:
+            weights_grad_to_loss = self.input.T @ (output_grad_to_loss / m) + 2 * reg_strength * self._weights
+        else:
+            weights_grad_to_loss = self.input.T @ (output_grad_to_loss / m)
         
         return weights_grad_to_loss
     

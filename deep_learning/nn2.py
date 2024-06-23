@@ -214,8 +214,8 @@ class ChunkNN:
                 #start_gen = time.time()
 
             epoch_end_time = time.time()
-
-            print(f"Epoch completion time: {(epoch_end_time-epoch_start_time) / 3600} Hours")
+            if verbose:
+                print(f"Epoch completion time: {(epoch_end_time-epoch_start_time) / 3600} Hours")
             
             # record costs after each epoch gap
             if epoch % epoch_gap == 0:
@@ -238,8 +238,9 @@ class ChunkNN:
                     self._update_epoch_plot(fig, ax, epoch, end_epoch)
 
                 gap_end_time = time.time()
-
-                print(f"Gap completion time: {(gap_end_time-gap_start_time) / 3600} Hours")
+                
+                if verbose:
+                    print(f"Gap completion time: {(gap_end_time-gap_start_time) / 3600} Hours")
             else:
                 self._train_costs.append(None)
                 self._dev_costs.append(None)
@@ -353,8 +354,8 @@ class ChunkNN:
         cost = self.loss_layer.get_cost(y_pred, y_true)
 
         # L2 regularization loss with Frobenius norm
-        # if self.reg_strength != 0: 
-        #     cost = cost + self.reg_strength * sum(np.sum(self.params[f"W{layer}"] ** 2) for layer in range(1, self.num_layers-1))
+        if self.reg_strength != 0: 
+            cost = cost + self.reg_strength * sum(np.sum(layer._weights ** 2) for layer in self.layers if isinstance(layer, nn_layers.Web))
 
         return cost
     
