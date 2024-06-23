@@ -430,8 +430,8 @@ class Chunk:
 
             if self._standardize:
                 if self._train_chunk or self._linked_chunk:
-                    X_data = (X_data - self._train_mean) / self._train_std
-                    #X_data = (X_data - 33.3183) / 78.567
+                    #X_data = (X_data - self._train_mean) / self._train_std
+                    X_data = (X_data - 33.3183) / 78.567
 
             yield X_data, y_data
 
@@ -619,7 +619,6 @@ class SuperChunk(Chunk):
 
     def _set_training_data_std(self):
         # set the seed
-        #np.random.seed(self.seed)
 
         rng = np.random.default_rng(self.seed)
 
@@ -641,7 +640,6 @@ class SuperChunk(Chunk):
     def generate(self):
         # set the seed
         #batch_num = 0
-        #np.random.seed(self.seed)
 
         rng = np.random.default_rng(self.seed)
         for X_data, y_data in super().generate():

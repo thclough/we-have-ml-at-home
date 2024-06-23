@@ -22,8 +22,12 @@ from . import learning_funcs
 ### input, outputs, gradient updates along the way, 
 
 ## different types of regularization
+
+# COMPLETED
 ## different types of loss
 ## learning rate schedulers/optimizers
+
+# REJECTED
 
 class SmoothNN:
     """Simple neural network class"""
@@ -509,7 +513,7 @@ class SmoothNN:
                 dJ_dz_ahead = self.loss.backward(a_ahead, y)
             else: # move gradient backward
                 dJ_da_ahead = dJ_dz_past @ W_ahead.T
-                da_dz_ahead = activation.backward(activation_input) # this is the problem, yes, should be y when batch prob
+                da_dz_ahead = activation.backward(activation_input)
 
                 keep_prob = self.layers[layer]["keep_prob"]
 
@@ -523,7 +527,6 @@ class SmoothNN:
             if batch_norm:
                 # retrieve values
                 z_hat = forward_cache[f"z_hat{layer}"]
-                raw_z = forward_cache[f"z{layer}"]
                 batch_mean = forward_cache[f"batch_mean{layer}"]
                 batch_var = forward_cache[f"batch_var{layer}"]
                 scale = self.params[f"scale{layer}"]
@@ -808,7 +811,7 @@ class ChunkNN(SmoothNN):
         batch_size = train_chunk.chunk_size
 
         self._dev_flag = False
-        if dev_chunk:
+        if dev_chunk is not None:
             self.dev_chunk = dev_chunk
             self._dev_flag = True
 
@@ -842,8 +845,7 @@ class ChunkNN(SmoothNN):
                 super()._set_epoch_dropout_masks(seed=self._batch_seed)
 
             # set a seed for sampling batches for loss
-            np.random.seed(self._batch_seed)
-
+            rng2 = np.random.default_rng(self._batch_seed)
             #start_gen = time.time()
             for X_train, y_train in train_chunk.generate():
                 #end_gen = time.time()
@@ -855,8 +857,7 @@ class ChunkNN(SmoothNN):
                 #print(f"batch time: {end_batch-start_batch}")
                 
                 if verbose:
-                    
-                    if np.random.binomial(1, self._batch_prob):
+                    if rng2.binomial(1, self._batch_prob):
                         sampled_batch_loss = super().avg_loss(X_train, y_train)
 
                         print(f"\t Sampled batch loss: {sampled_batch_loss}")
@@ -1049,7 +1050,6 @@ class SuperChunkNN(SmoothNN):
 
     def refine(self, 
             super_chunk, 
-            learning_rate=None, 
             reg_strength=None,
             num_epochs=15,
             epoch_gap=5,
@@ -1074,8 +1074,6 @@ class SuperChunkNN(SmoothNN):
         self._rounds.append(self._epoch)
 
         # update attributes if needed
-        if learning_rate is not None:
-            self.learning_rate = learning_rate
         if reg_strength is not None:
             self.reg_strength = reg_strength
 
