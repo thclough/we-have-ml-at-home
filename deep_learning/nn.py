@@ -372,7 +372,7 @@ class SmoothNN:
             # create batch_total_pass, just return this
             self._batch_total_pass(X_train_batch, y_train_batch)
 
-            # cur_train_time = time.time()
+            cur_train_time = time.time()
             #print(cur_train_time-start_train_time)
 
             #start_train_time = cur_train_time
@@ -404,8 +404,8 @@ class SmoothNN:
         # perform back prop to obtain gradients
         grad_dict = self._backward_prop(X_train_batch, y_train_batch, forward_cache_batch)
         
-        #time5 = time.time()
-        #print(f"time for backwards {time5-time4}")
+        # time5 = time.time()
+        # print(f"time for backwards {time5-time4}")
 
         # update params
         for param in self.params:
@@ -416,8 +416,8 @@ class SmoothNN:
             else:
                 self.params[param] = self.params[param] - (self.learning_rate * gradient)
         
-        #time6 = time.time()
-        #print(f"Time for params update {time6-time5}")
+        # time6 = time.time()
+        # print(f"Time for params update {time6-time5}")
         
     def _forward_prop(self, X_train):
         """Perform forward pass in neural net while storing intermediaries. 
@@ -855,7 +855,7 @@ class ChunkNN(SmoothNN):
                 #start_batch = time.time()
                 super()._batch_total_pass(X_train, y_train)
                 #end_batch = time.time()
-                #print(f"batch time: {end_batch-start_batch}")
+                # print(f"batch time: {end_batch-start_batch}")
                 
                 if verbose:
                     if rng2.binomial(1, self._batch_prob):

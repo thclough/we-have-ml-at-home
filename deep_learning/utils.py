@@ -13,3 +13,15 @@ def get_file_dir(source_path: str) -> str:
         return match.group(1)
     else:
         return None  # Return None if no extension is found
+    
+def dim_size(dims):
+    if isinstance(dims, tuple):
+        product = 1
+        for dim in dims:
+            product *= dim
+    elif isinstance(dims, int):
+        product = dims
+    else:
+        raise TypeError("Dims must be int or tuple")
+    
+    return product

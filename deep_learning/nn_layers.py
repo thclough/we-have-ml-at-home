@@ -1,7 +1,9 @@
 import numpy as np
 from . import no_resources
 from . import node_funcs
+from . import utils
 
+import time
 
 # WEB LAYER
 class Web:
@@ -10,7 +12,9 @@ class Web:
     """Weights layer to linearly transform activation values"""
     def __init__(self, output_shape, input_shape=None):
         
+        self.input_layer_flag = False
         self.output_layer = None
+        self.feeds_into_norm = False
 
         self.input_shape = input_shape
         self.output_shape = output_shape
@@ -24,7 +28,7 @@ class Web:
 
     def initialize_params(self):
 
-        input_size = self.dim_size(self.input_shape)
+        input_size = utils.dim_size(self.input_shape)
 
         if isinstance(self.output_layer, (Activation, Loss)):
             if isinstance(self.output_layer.activation_func, (node_funcs.ReLU, node_funcs.LeakyReLU)): 
@@ -35,45 +39,43 @@ class Web:
             factor = 1
 
         self._weights = np.random.normal(size=(self.input_shape, self.output_shape)) * np.sqrt(factor / input_size)
-        self._bias = np.zeros(shape=self.output_shape)
-
-    @staticmethod
-    def dim_size(dims):
-        if isinstance(dims, tuple):
-            product = 1
-            for dim in dims:
-                product *= dim
-        elif isinstance(dims, int):
-            product = dims
-        else:
-            raise TypeError("Dims must be int or tuple")
-        
-        return product
+        if not self.feeds_into_norm:
+            self._bias = np.zeros(shape=self.output_shape) 
     
     # PROPAGATE
 
-    def advance(self, input, cache=True):
+    def advance(self, input, forward_prop_flag=True):
         """Move forward in the Neural net"""
 
-        if cache: # don't save the input if the input layer
+        if forward_prop_flag: # don't save the input if the input layer
             self.input = input
 
-        return input @ self._weights + self._bias
+        if self.feeds_into_norm:
+            output = input @ self._weights 
+        else: 
+            output = input @ self._weights + self._bias
+
+        return output
 
     def back_up(self, output_grad_to_loss, learning_rate, reg_strength, update_params_flag=True):
         
+        if not self.input_layer_flag:
+            input_grad_to_loss = output_grad_to_loss @ self._weights.T
+        else:
+            input_grad_to_loss = None
+
+        # update params
         if update_params_flag and self.input is not None:
             
             weights_grad_to_loss = self._calc_weights_grads(output_grad_to_loss, reg_strength=reg_strength)
             self._update_param(self._weights, weights_grad_to_loss, learning_rate)
 
-            bias_grad_to_loss = self._calc_bias_grads(output_grad_to_loss)
-            self._update_param(self._bias, bias_grad_to_loss, learning_rate)
+            if not self.feeds_into_norm:
+                bias_grad_to_loss = self._calc_bias_grads(output_grad_to_loss)
+                self._update_param(self._bias, bias_grad_to_loss, learning_rate)
 
         # discharge the input
         self.input = None
-        
-        input_grad_to_loss = output_grad_to_loss @ self._weights.T
 
         return input_grad_to_loss
     
@@ -115,9 +117,9 @@ class Activation:
 
         self.input = None
 
-    def advance(self, input, cache=True):
+    def advance(self, input, forward_prop_flag=True):
 
-        if cache:
+        if forward_prop_flag:
             self.input = input
 
         return self.activation_func.forward(input)
@@ -144,10 +146,10 @@ class Loss:
 
         self.learnable = False
         
-    def advance(self, input, cache=True):
+    def advance(self, input, forward_prop_flag=True):
         
         output = self.activation_func.forward(input)
-        if cache:
+        if forward_prop_flag:
             self.input = input 
             self.output = output
 
@@ -180,7 +182,7 @@ class Dropout:
     
     learnable = False
 
-    def __init__(self, keep_prob, input_shape=None, seed=100):
+    def __init__(self, keep_prob, seed=100):
         
         # validate the keep prob
         self._val_keep_prob(keep_prob)
@@ -190,7 +192,7 @@ class Dropout:
 
         self._epoch_dropout_mask = None
 
-        self.input_shape = input_shape
+        self.input_shape = None
 
     @staticmethod
     def _val_keep_prob(keep_prob):
@@ -205,25 +207,107 @@ class Dropout:
 
         self._epoch_dropout_mask = (mask_rng.random(self.input_shape) < self._keep_prob).astype(int)
 
-    def advance(self, input, cache=True):
-        if cache:
+    def advance(self, input, forward_prop_flag=True):
+        if forward_prop_flag:
             output = (input * self._epoch_dropout_mask) / self._keep_prob
             return output
         else:
             return input
         
-
     def back_up(self, output_grad_to_loss):
         
         input_grad_to_loss = (output_grad_to_loss * self._epoch_dropout_mask) / self._keep_prob
 
         return input_grad_to_loss
         
-
 class BatchNorm:
     learnable = True
 
-    pass
+    def __init__(self):
+        self._scale = None
+        self._shift = None
+        
+        self._inf_mean = None
+        self._inf_var = None
+
+        self._z_hat = None
+
+        self.input_shape = None
+    
+    def initialize_params(self):
+
+        input_size = utils.dim_size(self.input_shape)
+
+        # scale and shift
+        self._scale = np.random.normal(input_size) * np.sqrt(1 / input_size)
+        self._shift = np.zeros(shape=input_size)
+
+        # params for inference normalization
+        self._inf_mean = np.zeros(shape=input_size)
+        self._inf_var = np.zeros(shape=input_size)
+
+    def advance(self, input, forward_prop_flag=True):
+        
+        if forward_prop_flag:
+            # find batch mean and var
+            self._batch_mean = input.mean(axis=0)
+            self._batch_var = input.var(axis=0)
+
+            # exponential average update batch mean and var
+            self._inf_mean = .9 * self._inf_mean + .1 * self._batch_mean
+            self._inf_var = .9 * self._inf_var + .1 * self._batch_var
+
+            z_hat = self._z_hat = (input - self._batch_mean) / np.sqrt(self._batch_var + 10e-8)
+
+        else:
+            z_hat = (input - self._inf_mean) / np.sqrt(self._inf_var + 10e-8)
+            
+        output = self._scale * z_hat + self._shift
+
+        return output
+    
+    def back_up(self, output_grad_to_loss, learning_rate, reg_strength, update_params_flag=True):
+        
+        m = len(output_grad_to_loss)
+
+        # find original input grad to loss
+        dloss_dz_hat = output_grad_to_loss * self._scale
+        input_grad_to_loss = (m * dloss_dz_hat - np.sum(dloss_dz_hat, axis=0) - self._z_hat * np.sum(dloss_dz_hat * self._z_hat, axis=0)) / (m * np.sqrt(self._batch_var + 10e-8)) 
+
+        if update_params_flag:
+
+            scale_grad_to_loss = self._calc_scale_grad(output_grad_to_loss)
+            self._update_param(self._scale, scale_grad_to_loss, learning_rate)
+
+            shift_grad_to_loss = self._calc_shift_grad(output_grad_to_loss)
+            self._update_param(self._shift, shift_grad_to_loss, learning_rate)
+
+        self._batch_mean = None
+        self._batch_var = None
+        self._z_hat = None
+
+        return input_grad_to_loss
+
+    def _calc_scale_grad(self, output_grad_to_loss):
+
+        scale_grad_to_loss = np.mean(output_grad_to_loss * self._z_hat, axis = 0)
+
+        return scale_grad_to_loss
+
+    def _calc_shift_grad(self, output_grad_to_loss):
+        
+        shift_grad_to_loss = np.mean(output_grad_to_loss, axis=0)
+
+        return shift_grad_to_loss
+    
+    def _update_param(self, param, grad, learning_rate):
+
+        if isinstance(grad, no_resources.RowSparseArray):
+            (learning_rate * grad).subtract_from_update(param)
+        else:
+            param -= (learning_rate * grad)
+
+
 
 
 

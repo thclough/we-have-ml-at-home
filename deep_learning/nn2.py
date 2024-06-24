@@ -14,7 +14,7 @@ class ChunkNN:
     def __init__(self):
         self.layers = []
         self.loss_layer = None
-        self._last_output_shape = None
+        self._last_output_layer = None
 
         self._learning_rates = []
         self._reg_strengths = []
@@ -32,25 +32,28 @@ class ChunkNN:
             raise Exception("Cannot add another layer after Loss layer")
 
         if len(self.layers) == 0:
-            if isinstance(layer_object, (nn_layers.Web, nn_layers.Dropout)):
+            if isinstance(layer_object, nn_layers.Web):
                 if layer_object.input_shape is None:
                     raise Exception("First layer input shape must be set in layer")
                 
-                if isinstance(layer_object, (nn_layers.Web)):
-                    self._last_output_shape = layer_object.output_shape
+                layer_object.input_layer_flag = True
+                self._last_output_layer = layer_object
             else:
                 raise Exception("First layers must be a web layer")
 
         if len(self.layers) > 0:
-            if isinstance(layer_object, (nn_layers.Web, nn_layers.Dropout)):
+            if isinstance(layer_object, (nn_layers.Web, nn_layers.Dropout, nn_layers.BatchNorm)):
                 if layer_object.input_shape is not None:
-                    if layer_object.input_shape != self._last_output_shape:
+                    if layer_object.input_shape != self._last_output_layer.output_shape:
                         raise Exception("Input shape must equal the output shape of the last web")
                 else:
-                    layer_object.input_shape = self._last_output_shape
+                    layer_object.input_shape = self._last_output_layer.output_shape
                 
                 if isinstance(layer_object, (nn_layers.Web)):
-                    self._last_output_shape = layer_object.output_shape
+                    self._last_output_layer = layer_object
+
+            if isinstance(layer_object, nn_layers.BatchNorm):
+                self._last_output_layer.feeds_into_norm = True
 
             if isinstance(self.layers[-1], nn_layers.Web):
                 self.layers[-1].output_layer = layer_object
@@ -58,12 +61,12 @@ class ChunkNN:
         if isinstance(layer_object, nn_layers.Loss):
             if layer_object.loss_func == node_funcs.BCE:
 
-                if self._last_output_shape != 1:
+                if self._last_output_layer.output_shape != 1:
                     raise Exception("Should use output layer of size 1 when using binary cross entropy loss,\
                                     decrease layer size to 1 or use CE (regular cross entropy)")
 
             if layer_object.loss_func == node_funcs.CE:
-                if self._last_output_shape < 2:
+                if self._last_output_layer.output_shape < 2:
                     raise Exception("Should use cross entropy loss for multi-class classification, increase layer-size or use BCE")
 
             self.loss_layer = layer_object
@@ -268,6 +271,36 @@ class ChunkNN:
                 fig.savefig(display_path)
 
         plt.close()
+
+    # PROP
+
+    def _batch_total_pass(self, X_train_batch, y_train_batch):
+        """forward propagation, backward propagation and parameter updates for gradient descent"""
+
+        # forward pass
+        self._forward_prop(X_train_batch)
+
+        # perform back prop to obtain gradients and update
+        self._back_prop(X_train_batch, y_train_batch)
+
+    def _forward_prop(self, X_train):
+        
+        input = X_train
+        for layer in self.layers:
+            input = layer.advance(input, forward_prop_flag=True)
+
+    def _back_prop(self, X_train, y_train):
+        
+        loss_layer = True
+        for layer in reversed(self.layers):
+            if loss_layer:
+                input_grad_to_loss = layer.back_up(y_train)
+                loss_layer = False
+            else:
+                if layer.learnable:
+                    input_grad_to_loss = layer.back_up(input_grad_to_loss, learning_rate=self.learning_rate, reg_strength=self.reg_strength)
+                else:
+                    input_grad_to_loss = layer.back_up(input_grad_to_loss)
     
     # EPOCH PLOT 
     def _initialize_epoch_plot(self):
@@ -318,37 +351,6 @@ class ChunkNN:
     def _update_scatter(collection, new_x, new_y):
         offsets = np.c_[new_x, new_y]
         collection.set_offsets(offsets)
-
-    # PROP
-
-    def _batch_total_pass(self, X_train_batch, y_train_batch):
-        """forward propagation, backward propagation and parameter updates for gradient descent"""
-
-        # forward pass
-        self._forward_prop(X_train_batch)
-
-        # perform back prop to obtain gradients and update
-        self._back_prop(X_train_batch, y_train_batch)
-        
-
-    def _forward_prop(self, X_train):
-        
-        input = X_train
-        for layer in self.layers:
-            input = layer.advance(input, cache=True)
-
-    def _back_prop(self, X_train, y_train):
-        
-        loss_layer = True
-        for layer in reversed(self.layers):
-            if loss_layer:
-                input_grad_to_loss = layer.back_up(y_train)
-                loss_layer = False
-            else:
-                if layer.learnable:
-                    input_grad_to_loss = layer.back_up(input_grad_to_loss, learning_rate=self.learning_rate, reg_strength=self.reg_strength)
-                else:
-                    input_grad_to_loss = layer.back_up(input_grad_to_loss)
 
     # COST/LOSS
 
@@ -406,7 +408,7 @@ class ChunkNN:
 
         # go through the layers and save the activations
         for layer in self.layers:
-            input = layer.advance(input, cache=False)
+            input = layer.advance(input, forward_prop_flag=False)
 
         return input
     
