@@ -1,5 +1,5 @@
 import numpy as np
-from . import no_resources
+from . import no_resources2
 from . import node_funcs
 from . import utils
 
@@ -102,7 +102,7 @@ class Web:
 
     def _update_param(self, param, grad, learning_rate):
 
-        if isinstance(grad, no_resources.RowSparseArray):
+        if isinstance(grad, no_resources2.RowSparseArray):
             (learning_rate * grad).subtract_from_update(param)
         else:
             param -= (learning_rate * grad)
@@ -302,7 +302,7 @@ class BatchNorm:
     
     def _update_param(self, param, grad, learning_rate):
 
-        if isinstance(grad, no_resources.RowSparseArray):
+        if isinstance(grad, no_resources2.RowSparseArray):
             (learning_rate * grad).subtract_from_update(param)
         else:
             param -= (learning_rate * grad)

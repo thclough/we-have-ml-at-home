@@ -11,12 +11,13 @@ import random
 from contextlib import ExitStack
 import queue 
 import threading
+from collections import OrderedDict
 
 from . import utils
 
 
 #TODO
-## automatically create jar openers for setting input
+
 ## option for generating ints or floats (maybe in set data input and output)
 ## chunk sizes mean batch sizes for chunk nn, but batch_size * train_prop = batch size for super chunk
 ## oha dict allows for double indexing
@@ -26,6 +27,7 @@ from . import utils
 
 
 # COMPLETED
+## automatically create jar openers for setting input
 
 
 # REJECTED
@@ -217,17 +219,19 @@ class JarOpener:
             traceback.print_exception(exc_type, exc_value, exc_traceback)
         return False   
 
-class Chunk:
-    """Chunk object to deal with parsing large datasets, 
-    feeds data chunk by chunk without reading whole dataset into memory."""
+# DATA GENERATORS
+
+class PreDataGenerator:
 
     def __init__(self, batch_size, train_generator=False):
         self.batch_size = batch_size
         self._train_generator = train_generator
-        self._linked_chunk = False
+        self._linked_generator = False
+
         self._input_flag = False
         self._output_flag = False
 
+    # setting data properties
     def set_data_input_props(self, input_path, data_selector=np.s_[:], skiprows=0, sparse_dim=None, standardize=False):
         """Set the data/input properties for the chunk object
         
@@ -255,44 +259,6 @@ class Chunk:
 
         self._standardize = standardize
         
-        # calculate mean and standard deviation of training data if standardizing
-        if self._standardize and self._train_generator:
-            if self._sparse_dim is not None:
-                raise Exception("Chunk does not support standardization for sparse dim")
-            self._set_training_data_mean()
-            self._set_training_data_std()
-
-        # get length of the data
-        self._set_num_data_lines()
-        self._num_chunks = self._num_data_lines / self.batch_size
-
-    @property
-    def input_dim(self):
-        return self._input_dim
-
-    @input_dim.setter
-    def input_dim(self):
-        raise Exception("Cannot directly set input_dim")
-
-    def set_input_dim(self):
-        """Set the dimension of the input data by peeking inside the input data file"""
-
-        if self._sparse_dim:
-            dim = self._sparse_dim
-        else:
-            dim = self.get_selector_dim(self._input_jar, self._data_input_selector)
-
-        self._input_dim = dim
-
-    def _set_num_data_lines(self):
-        """Retrieve total length of the data """
-        with self._input_jar as data_file:
-            for _ in range(self._input_skiprows):
-                next(data_file)
-            data_lines = sum(1 for line in data_file)
-
-        self._num_data_lines = data_lines
-
     def set_data_output_props(self, output_path, data_selector=np.s_[:], skiprows=0, one_hot_width=None):
         """Set the label properties for the chunk object
         
@@ -318,6 +284,26 @@ class Chunk:
         self.set_output_dim()
 
         self._output_flag = True
+
+    # Data property 
+
+    @property
+    def input_dim(self):
+        return self._input_dim
+
+    @input_dim.setter
+    def input_dim(self):
+        raise Exception("Cannot directly set input_dim")
+
+    def set_input_dim(self):
+        """Set the dimension of the input data by peeking inside the input data file"""
+
+        if self._sparse_dim:
+            dim = self._sparse_dim
+        else:
+            dim = self.get_selector_dim(self._input_jar, self._data_input_selector)
+
+        self._input_dim = dim
 
     @property
     def output_dim(self):
@@ -346,6 +332,158 @@ class Chunk:
 
         return selector_dim
 
+    @property
+    def one_hot_width(self):
+        return self._one_hot_width
+    
+    @one_hot_width.setter
+    def one_hot_width(self, one_hot_width_cand):
+        """Validate one hot encoding for set_data_output_props and set if appropriate
+        
+        Args:
+            one_hot_width_cand (int) : candidate for one_hot_width
+        """
+        if one_hot_width_cand is None:
+            self._one_hot_width = one_hot_width_cand
+        elif isinstance(one_hot_width_cand, int):
+            dim = self.get_selector_dim(self._output_jar, self._data_output_selector)
+
+            if dim == 1:
+                self._one_hot_width = one_hot_width_cand
+            else:
+                raise AttributeError("Cannot set one_hot_width and one hot encode if dimensions of raw output is not 1")
+        else:
+            return AttributeError(f"one_hot_width must be an integer or None, value of {one_hot_width_cand} given")
+
+    def one_hot_labels(self, y_data):
+        """One hot labels from y_data
+        
+        Args:
+            y_data (numpy array)
+
+        Returns:
+            one_hot_labels
+        
+        """
+        one_hot_labels = np.zeros((y_data.size, self._one_hot_width))
+        one_hot_labels[np.arange(y_data.size), y_data.astype(int).flatten()] = 1
+
+        return one_hot_labels
+
+    # handle linked chunks
+
+    def create_linked_generator(self, input_path, output_path, generator_type):
+        """Create a chunk linked to the instance train chunk, ex. a dev or test chunk
+        
+        Args:
+            input_path (str) : path for input data
+            output_path (str) : path for output data
+            generator_type (no_resources generator) : generator
+        Returns:
+            
+        """
+        input_jar = JarOpener(input_path)
+        output_jar =  JarOpener(output_path)
+        self.val_create_linked_generator(input_jar, output_jar)
+
+        linked_chunk = generator_type(batch_size=self.batch_size, train_generator=False)
+        linked_chunk._linked_generator = True
+
+        # set data and properties
+        linked_chunk.set_data_input_props(input_path=input_path,
+                                          data_selector=self._data_input_selector, 
+                                          skiprows=self._input_skiprows, 
+                                          sparse_dim=self._sparse_dim, 
+                                          standardize=self._standardize)
+        
+        if self.input_dim != linked_chunk.input_dim:
+            raise Exception("Input data dimensions are not the same")
+
+        linked_chunk.set_data_output_props(output_path=output_path,
+                                           data_selector=self._data_output_selector,
+                                           skiprows=self._output_skiprows,
+                                           one_hot_width=self.one_hot_width)
+        if self.output_dim != linked_chunk.output_dim:
+            raise Exception("Output data dimensions are not the same")
+                                          
+        return linked_chunk
+
+    def val_create_linked_generator(self, input_chunk, output_chunk):
+        """Validate train chunk"""
+        # validation
+        if not self._train_generator:
+            raise Exception("Can only create linked generators from a train generator")
+        if not self._input_flag:
+            raise Exception("Must set input properties for train generator before linking")
+        if not self._output_flag:
+            raise Exception("Must set output properties for train generator before linking")
+
+class MiniBatchGenerator(PreDataGenerator):
+
+    def __init__(self, batch_size, train_generator=False):
+        super().__init__(batch_size, train_generator)
+        self.X = None
+        self.y = None
+        self._data_loaded = False
+
+    # property setters
+
+    def set_data_input_props(self, input_path, data_selector=np.s_[:], skiprows=0, sparse_dim=None, standardize=False):
+        super().set_data_input_props(input_path, data_selector, skiprows, sparse_dim, standardize)
+        
+        if self._input_flag and self._output_flag:
+            self._load_data()
+
+    def set_data_output_props(self, output_path, data_selector=np.s_[:], skiprows=0, one_hot_width=None):
+        super().set_data_output_props(output_path, data_selector, skiprows, one_hot_width)
+        if self._input_flag and self._output_flag:
+            self._load_data()
+
+    # Data generation
+
+    def _load_data(self):
+        X_data, y_data = self.generate_input_data(), self.generate_output_data()
+
+        # validate that the jars link up
+        if len(X_data) != len(y_data):
+            raise Exception("Input file and output file are not the same length")
+        
+        if self._sparse_dim:
+            X_data = OneHotArray(shape=(len(X_data),self._sparse_dim),idx_array=X_data)
+
+        if self._one_hot_width:
+            y_data = self.one_hot_labels(y_data)
+
+        if self._standardize:
+            if self._sparse_dim is not None:
+                raise Exception("Generator does not support standardization for sparse dim")
+            if self._train_generator:
+                self._train_mean = X_data.mean(axis=0)
+                self._train_std = X_data.std(axis=0)
+
+            if self._train_generator or self._linked_generator:
+                X_data = (X_data - self._train_mean) / self._train_std
+                #X_data = (X_data - 33.3183) / 78.567
+
+        self.X, self.y = X_data, y_data
+
+        self._data_loaded = True
+
+    def generate(self):
+        if not self._data_loaded:
+            self._load_data()
+        
+        m = len(self.X)
+
+        for start_idx in range(0,m-1,self.batch_size):
+            end_idx = min(start_idx + self.batch_size, m)
+            
+            # locate relevant fields to 
+            X_train_batch = self.X[start_idx:end_idx]
+            y_train_batch = self.y[start_idx:end_idx]
+
+            yield X_train_batch, y_train_batch
+
     def generate_input_data(self):
         """Generate X_data input"""
         return self.generate_raw_jar_data(self._input_flag, self._input_jar, self._input_skiprows, self._data_input_selector)
@@ -354,10 +492,99 @@ class Chunk:
         """Generate X_data input"""
         return self.generate_raw_jar_data(self._output_flag, self._output_jar, self._output_skiprows, self._data_output_selector, ndmin=2)
 
-    def build_queue(self, q_to_build, generator):
-        for data in generator:
-            q_to_build.put(data)
-        q_to_build.put(None)
+    def generate_raw_jar_data(self, set_flag, jar_opener, skiprows, data_selector, ndmin=0):
+        # check if input and output are set
+        if not set_flag:
+            raise Exception("Please set data input properties (set_data_input_props)")
+        
+        # open the file
+        with jar_opener as data_file:
+
+            # skip rows
+            for _ in range(skiprows):
+                next(data_file)
+
+            # read data
+            data = np.loadtxt(data_file, delimiter=",", ndmin=ndmin, dtype=int)
+
+            data = data[:,data_selector]
+
+        return data
+    
+    def create_linked_generator(self, input_path, output_path):
+        linked_chunk = super().create_linked_generator(input_path, output_path, MiniBatchGenerator)
+        if self._standardize:
+            linked_chunk._train_mean = self._train_mean
+            linked_chunk._train_std = self._train_std
+    
+        return linked_chunk
+
+class Chunk(PreDataGenerator):
+    """Chunk object to deal with parsing large datasets, 
+    feeds data chunk by chunk without reading whole dataset into memory."""
+
+    # def __init__(self, batch_size, train_generator=False):
+    #     super().__init__(batch_size, train_generator)
+
+    def set_data_input_props(self, input_path, data_selector=np.s_[:], skiprows=0, sparse_dim=None, standardize=False):
+        super().set_data_input_props(input_path, data_selector, skiprows, sparse_dim, standardize)
+        # calculate mean and standard deviation of training data if standardizing
+        
+        if self._standardize and self._train_generator:
+            if self._sparse_dim is not None:
+                raise Exception("Generator does not support standardization for sparse dim")
+            self._set_training_data_mean()
+            self._set_training_data_std()
+
+        # get length of the data
+        self._set_num_data_lines()
+        self._num_chunks = self._num_data_lines / self.batch_size
+
+    def _set_num_data_lines(self):
+        """Retrieve total length of the data """
+        with self._input_jar as data_file:
+            for _ in range(self._input_skiprows):
+                next(data_file)
+            data_lines = sum(1 for line in data_file)
+
+        self._num_data_lines = data_lines
+
+    def _set_training_data_mean(self):
+        """Retrieve the mean of the training data if applicable"""
+
+        train_sum = np.zeros(self.input_dim)
+        train_count = 0
+
+        for X_train in self.generate_input_data():
+            data_len = X_train.shape[0]
+
+            train_sum += X_train.sum(axis=0)
+            train_count += data_len
+        
+        self._train_mean = train_sum / train_count
+
+    def _set_training_data_std(self):
+
+        sum_dev_sqd = np.zeros(self.input_dim)
+        train_count = 0
+
+        for X_train in self.generate_input_data():
+            data_len = X_train.shape[0]
+
+            sum_dev_sqd += ((X_train - self._train_mean) ** 2).sum(axis=0)
+            train_count += data_len
+
+        self._train_std = np.sqrt(sum_dev_sqd / train_count)
+
+    # Data Generation
+
+    def generate_input_data(self):
+        """Generate X_data input"""
+        return self.generate_raw_jar_data(self._input_flag, self._input_jar, self._input_skiprows, self._data_input_selector)
+
+    def generate_output_data(self):
+        """Generate X_data input"""
+        return self.generate_raw_jar_data(self._output_flag, self._output_jar, self._output_skiprows, self._data_output_selector, ndmin=2)
 
     def generate_raw_jar_data(self, set_flag, jar_opener, skiprows, data_selector, ndmin=0):
         """Generate raw jar data without transforming into OneHotArray for input or one hot vector for output data
@@ -398,8 +625,19 @@ class Chunk:
                     break
 
                 data = data[:,data_selector]
-
+                
                 yield data
+
+    def create_linked_generator(self, input_path, output_path):
+        linked_chunk = super().create_linked_generator(input_path, output_path, Chunk)
+        if self._standardize:
+            linked_chunk._train_mean = self._train_mean
+            linked_chunk._train_std = self._train_std
+
+    def build_queue(self, q_to_build, generator):
+        for data in generator:
+            q_to_build.put(data)
+        q_to_build.put(None)
 
     def generate(self):
 
@@ -424,296 +662,208 @@ class Chunk:
             
             if self._sparse_dim:
                 X_data = OneHotArray(shape=(len(X_data),self._sparse_dim),idx_array=X_data)
-
+ 
             if self._one_hot_width:
-                y_data = self.one_hot_labels(y_data)
+                y_data = super().one_hot_labels(y_data)
 
             if self._standardize:
-                if self._train_generator or self._linked_chunk:
-                    #X_data = (X_data - self._train_mean) / self._train_std
-                    X_data = (X_data - 33.3183) / 78.567
-
-            yield X_data, y_data
-
-        input_thread.join()
-        output_thread.join()
-            
-    def generate2(self):
-        # yield is weird here will have to check this out
-        for X_data, y_data in zip(self.generate_input_data(), self.generate_output_data()):
-
-            # validate that the jars link up
-            if len(X_data) != len(y_data):
-                raise Exception("Input file and output file are not the same length")
-            
-            if self._sparse_dim:
-                X_data = OneHotArray(shape=(len(X_data),self._sparse_dim),idx_array=X_data)
-
-            if self._one_hot_width:
-                y_data = self.one_hot_labels(y_data)
-
-            if self._standardize:
-                if self._train_generator or self._linked_chunk:
+                if self._train_generator or self._linked_generator:
                     X_data = (X_data - self._train_mean) / self._train_std
                     #X_data = (X_data - 33.3183) / 78.567
 
             yield X_data, y_data
 
-    @property
-    def one_hot_width(self):
-        return self._one_hot_width
-    
-    @one_hot_width.setter
-    def one_hot_width(self, one_hot_width_cand):
-        """Validate one hot encoding for set_data_output_props and set if appropriate
-        
-        Args:
-            one_hot_width_cand (int) : candidate for one_hot_width
-        """
-        if one_hot_width_cand is None:
-            self._one_hot_width = one_hot_width_cand
-        elif isinstance(one_hot_width_cand, int):
-            dim = self.get_selector_dim(self._output_jar, self._data_output_selector)
-
-            if dim == 1:
-                self._one_hot_width = one_hot_width_cand
-            else:
-                raise AttributeError("Cannot set one_hot_width and one hot encode if dimensions of raw output is not 1")
-        else:
-            return AttributeError(f"one_hot_width must be an integer or None, value of {one_hot_width_cand} given")
-
-    def one_hot_labels(self, y_data):
-        """One hot labels from y_data
-        
-        Args:
-            y_data (numpy array)
-
-        Returns:
-            one_hot_labels
-        
-        """
-        one_hot_labels = np.zeros((y_data.size, self._one_hot_width))
-        one_hot_labels[np.arange(y_data.size), y_data.astype(int).flatten()] = 1
-
-        return one_hot_labels
-    
-    def _set_training_data_mean(self):
-        """Retrieve the mean of the training data if applicable"""
-
-        train_sum = np.zeros(self.input_dim)
-        train_count = 0
-
-        for X_train in self.generate_input_data():
-            data_len = X_train.shape[0]
-
-            train_sum += X_train.sum(axis=0)
-            train_count += data_len
-        
-        self._train_mean = train_sum / train_count
-
-    def _set_training_data_std(self):
-
-        sum_dev_sqd = np.zeros(self.input_dim)
-        train_count = 0
-
-        for X_train in self.generate_input_data():
-            data_len = X_train.shape[0]
-
-            sum_dev_sqd += ((X_train - self._train_mean) ** 2).sum(axis=0)
-            train_count += data_len
-
-        self._train_std = np.sqrt(sum_dev_sqd / train_count)
+        input_thread.join()
+        output_thread.join()
 
     def create_linked_generator(self, input_path, output_path):
-        """Create a chunk linked to the instance train chunk, ex. a dev or test chunk
-        
-        Args:
-            input_path (str) : path for input data
-            output_path (str) : path for output data
-        Returns:
-            
-        """
-        input_jar = JarOpener(input_path)
-        output_jar =  JarOpener(output_path)
-        self.val_create_linked_generator(input_jar, output_jar)
-
-        linked_chunk = Chunk(batch_size=self.batch_size, train_generator=False)
-        linked_chunk._linked_chunk = True
-
-        # set data and properties
-        linked_chunk.set_data_input_props(input_path=input_path,
-                                          data_selector=self._data_input_selector, 
-                                          skiprows=self._input_skiprows, 
-                                          sparse_dim=self._sparse_dim, 
-                                          standardize=self._standardize)
-        
-        if self.input_dim != linked_chunk.input_dim:
-            raise Exception("Input data dimensions are not the same")
+        linked_chunk = super().create_linked_generator(input_path, output_path, Chunk)
         if self._standardize:
             linked_chunk._train_mean = self._train_mean
             linked_chunk._train_std = self._train_std
-        linked_chunk.set_data_output_props(output_path=output_path,
-                                           data_selector=self._data_output_selector,
-                                           skiprows=self._output_skiprows,
-                                           one_hot_width=self.one_hot_width)
-        if self.output_dim != linked_chunk.output_dim:
-            raise Exception("Output data dimensions are not the same")
-                                          
+    
         return linked_chunk
 
-    def val_create_linked_generator(self, input_chunk, output_chunk):
-        """Validate train chunk"""
-        # validation
-        if not self._train_generator:
-            raise Exception("Can only create linked chunk from a train chunk")
-        if not self._input_flag:
-            raise Exception("Must set input properties for train chunk before linking")
-        if not self._output_flag:
-            raise Exception("Must set output properties for train chunk before linking")
-
-class SuperChunk(Chunk):
-    """Chunk object to deal with parsing large datasets, 
-    feeds data chunk by chunk without reading whole dataset into memory.
-    SuperChunk is different from Chunk because SuperChunk does not require separate 
-    data sources and will perform this data split on the fly. Specifically, 
-    There is a multinomial draw per chunk to divide into relevant test sets based on tdt_split.
-    
-    Attributes:
-        data_csv_path (str) : csv file path
-        batch_size (int) : size of the chunks
-        seed (int) : seed for train,dev,test split in chunks
-        tdt_split (3_tuple) : split of the data into (train_share, dev_share, test_share) as proportion of 1 ex. (.95,.04,.01)
-
-    Methods:
-        see method docstrings
+class ChunkManager(Chunk):
+    """
     """
     def __init__(self, 
-                batch_size, 
-                tdt_sizes=(.95,.04,.01),
-                seed=100):
+                 batch_size, 
+                 data_split,
+                 train_key,
+                 seed=100):
+        
         super().__init__(batch_size=batch_size,
                          train_generator=True)
-        self.tdt_sizes = tdt_sizes
+        
+        
+        self.data_split = data_split
+
+        self.train_key = train_key
+
+        self.val_data_split()
+
         self.seed = seed
 
-    def _set_training_data_mean(self):
-        # set the seed
-        #np.random.seed(self.seed)
+    @property
+    def train_key(self):
+        return self._train_key
 
-        rng = np.random.default_rng(self.seed)
-
-        train_sum = np.zeros(self.input_dim)
-        train_count = 0
-
-        for X_data in self.generate_input_data():
-            data_len = X_data.shape[0]
-
-            train_idxs, _, _ = self.get_tdt_idxs(data_len, rng)
-
-            X_train = X_data[train_idxs]
-
-            train_sum += X_train.sum(axis=0)
-            train_count += data_len
+    @train_key.setter
+    def train_key(self, train_key_cand):
         
-        self._train_mean = train_sum / train_count
-
-    def _set_training_data_std(self):
-        # set the seed
-
-        rng = np.random.default_rng(self.seed)
-
-        sum_dev_sqd = np.zeros(self.input_dim)
-        train_count = 0
-
-        for X_data in self.generate_input_data():
-            data_len = X_data.shape[0]
-
-            train_idxs, _, _ = self.get_tdt_idxs(data_len, rng)
-
-            X_train = X_data[train_idxs]
-
-            sum_dev_sqd += ((X_train - self._train_mean) ** 2).sum(axis=0)
-            train_count += data_len
+       self.val_key(train_key_cand)
+       
+       self._train_key = train_key_cand
+       
+    def val_key(self, key_name):
         
-        self._train_std = np.sqrt(sum_dev_sqd / train_count)
-
-    def generate(self):
-        # set the seed
-        #batch_num = 0
-
-        rng = np.random.default_rng(self.seed)
-        for X_data, y_data in super().generate():
-            
-            train_idxs, dev_idxs, test_idxs = self.get_tdt_idxs(X_data.shape[0], rng)
-
-            # if batch_num == 1:
-            #     print(dev_idxs)
-
-            X_train = X_data[train_idxs]
-            y_train = y_data[train_idxs]
-
-            X_dev = X_data[dev_idxs]
-            y_dev = y_data[dev_idxs]
-            
-            X_test = X_data[test_idxs]
-            y_test = y_data[test_idxs]
-
-            yield X_train, y_train, X_dev, y_dev, X_test, y_test
-            #batch_num += 1
-
-
-    def get_tdt_idxs(self, data_length, rng):
-        """Retrieve indexes of train, dev, and test set for data of given length
-        
-        Args:
-            data_length (int) : length of the data to retrieve idxs for
-
-        Returns:
-            train_idxs (numpy ndarray) 
-            dev_idxs (numpy ndarray) 
-            test_idxs (numpy ndarry) 
-        
-        """
-
-        shuffled_idxs = rng.permutation(data_length)
-        #shuffled_idxs = list(range(data_length))
-
-        train_share = self.tdt_sizes[0]
-        dev_share = self.tdt_sizes[1]
-
-        train_upper = round(train_share * data_length)
-        dev_upper = train_upper + round(dev_share * data_length)
-
-        train_idxs = shuffled_idxs[:train_upper]
-        dev_idxs = shuffled_idxs[train_upper:dev_upper]
-        test_idxs = shuffled_idxs[dev_upper:]
-
-        return train_idxs, dev_idxs, test_idxs
+        if key_name not in self.data_split.keys():
+            raise Exception(f"{key_name} not in data split keys")
 
     @property
-    def tdt_sizes(self):
-        return self._tdt_sizes
+    def data_split(self):
+        return self._data_split
 
-    @tdt_sizes.setter
-    def tdt_sizes(self, tdt_tuple_cand):
-        """Validate and set tdt_sizes """
+    @data_split.setter
+    def data_split(self, data_split_tuple_cand):
+        """Validate and set data_split"""
+    
+        self._data_split = data_split_tuple_cand
 
+    def val_data_split(self):
         # validation
-        val_list = np.array(tdt_tuple_cand)
+        val_list = np.array(list(self.data_split.values()))
 
-        train_share = tdt_tuple_cand[0]
+        train_share = self.data_split[self.train_key]
 
         if np.any(val_list < 0) or np.any(val_list > 1):
-            raise AttributeError("tdt splits must be between 0 and 1 inclusive")
+            raise AttributeError("Data splits must be between 0 and 1 inclusive")
 
         if train_share == 0:
             raise AttributeError("Training share must be greater than 0")
         
         if not np.isclose(val_list.sum(), 1):
-            raise AttributeError("tdt split must sum to 1")
-    
-        self._tdt_sizes = tdt_tuple_cand
+            raise AttributeError("Data split must sum to 1")
+
+    def _set_training_data_mean(self):
+
+        rng = np.random.default_rng(self.seed)
+
+        train_sum = np.zeros(self.input_dim)
+        train_count = 0
+
+        for X_train in self.generate_input_data():
+            data_len = X_train.shape[0]
+
+            train_sum += X_train.sum(axis=0)
+            train_count += data_len
         
+        self._train_mean = train_sum / train_count
+
+    def _set_training_data_std(self):
+        # set the seed
+
+        rng = np.random.default_rng(self.seed)
+
+        sum_dev_sqd = np.zeros(self.input_dim)
+        train_count = 0
+
+        for X_train in self.generate_input_data():
+            data_len = X_train.shape[0]
+
+            sum_dev_sqd += ((X_train - self._train_mean) ** 2).sum(axis=0)
+            train_count += data_len
+        
+        self._train_std = np.sqrt(sum_dev_sqd / train_count)
+
+    def generate(self, gen_key=None):
+
+        if gen_key is None:
+            gen_key = self.train_key
+
+        rng = np.random.default_rng(self.seed)
+        for X_data, y_data in super().generate():
+            
+            split_idxs = self._get_split_idxs(X_data.shape[0], rng)[gen_key]
+
+            # if batch_num == 1:
+            #     print(dev_idxs)
+
+            X = X_data[split_idxs]
+            y = y_data[split_idxs]
+
+            yield X, y
+            #batch_num += 1
+
+    def generate_all(self):
+
+        chunk_dict = OrderedDict()
+        rng = np.random.default_rng(self.seed)
+        for X_data, y_data in super().generate():
+
+            split_idx_dict = self._get_split_idxs(X_data.shape[0], rng)
+
+            for set_name, idxs in split_idx_dict.items():
+                chunk_dict[set_name] = (X_data[idxs], y_data[idxs])
+        
+            yield chunk_dict
+
+    def _get_split_idxs(self, data_length, rng):
+        """Retrieve indexes of different data sets for data of given length
+        
+        Args:
+            data_length (int) : length of the data to retrieve idxs for
+
+        Returns:
+            split_idxs (dict) : {set_name -> data index}
+        """
+
+        shuffled_idxs = rng.permutation(data_length)
+
+        split_idxs = OrderedDict()
+
+        beg_idx = 0 
+        for idx, set_name in enumerate(self.data_split):
+            
+            if idx == len(self.data_split) - 1:
+                split_idxs[set_name] = shuffled_idxs[beg_idx:]
+            else:
+                share = self.data_split[set_name]
+                end_idx = min(beg_idx + round(share * data_length), data_length)
+                split_idxs[set_name] = shuffled_idxs[beg_idx:end_idx]
+
+            beg_idx = end_idx
+
+        return split_idxs
+
+class ChunkManagerChild(Chunk):
+    
+    def __init__(self, chunk_manager:ChunkManager, gen_key, train_generator=False, load=False):
+        
+        self._train_generator = train_generator
+
+        self.chunk_manager = chunk_manager
+
+        self.gen_key = gen_key
+
+        self.batch_size = self.chunk_manager.batch_size
+
+    @property
+    def gen_key(self):
+        return self._gen_key
+    
+    @gen_key.setter
+    def gen_key(self, gen_key_cand):
+
+        self.chunk_manager.val_key(gen_key_cand)
+
+        self._gen_key = gen_key_cand
+    
+    def generate(self):
+        return self.chunk_manager.generate(self.gen_key)
+
+
 class OneHotArray:
     """Sparse array for maximizing storage efficiency
 

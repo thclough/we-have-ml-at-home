@@ -3,7 +3,7 @@ import numpy as np
 import joblib
 from . import nn_layers
 from . import node_funcs
-from . import no_resources
+from . import no_resources2
 from . import learning_funcs
 
 import matplotlib.pyplot as plt
@@ -92,8 +92,8 @@ class ChunkNN:
                 layer.set_epoch_dropout_mask(epoch)
 
     def fit(self,
-            train_chunk,
-            dev_chunk=None,
+            train_generator,
+            dev_generator=None,
             learning_scheduler=learning_funcs.ConstantRate(1),
             reg_strength=0,
             num_epochs=30,
@@ -104,6 +104,18 @@ class ChunkNN:
             display_path=None,
             verbose=True, 
             display=True):
+
+        self.refine(train_generator=train_generator,
+                    dev_generator=dev_generator,
+                    reg_strength=reg_strength,
+                    num_epochs=num_epochs,
+                    epoch_gap=epoch_gap,
+                    model_path=model_path,
+                    display_path=display_path,
+                    verbose=verbose, 
+                    display=display)
+    
+    def _fit_clear(self, learning_scheduler, batch_prob, batch_seed, verbose):
 
         # validate inputs def validate_structure
         self._val_structure()
@@ -135,16 +147,6 @@ class ChunkNN:
 
         self._initialize_params()
 
-        self.refine(train_chunk=train_chunk,
-                    dev_chunk=dev_chunk,
-                    reg_strength=reg_strength,
-                    num_epochs=num_epochs,
-                    epoch_gap=epoch_gap,
-                    model_path=model_path,
-                    display_path=display_path,
-                    verbose=verbose, 
-                    display=display)
-        
     def _val_structure(self):
         """validate the structure of the the NN"""
         if len(self.layers) == 0:
@@ -154,8 +156,8 @@ class ChunkNN:
             raise Exception("Please add a loss function")
         
     def refine(self,
-            train_chunk,
-            dev_chunk=None,
+            train_generator,
+            dev_generator=None,
             reg_strength=None,
             num_epochs=15,
             epoch_gap=5,
@@ -167,17 +169,17 @@ class ChunkNN:
         if not self._has_fit:
             raise Exception("Please fit the model before refining")
 
-        if not train_chunk._train_chunk:
-            raise Exception("Given train chunk must be a valid train chunk (_train_chunk attribute set to True)")
+        if not train_generator._train_generator:
+            raise Exception("Given train chunk must be a valid train chunk (_train_generator attribute set to True)")
         
-        self.train_chunk = train_chunk
+        self.train_generator = train_generator
 
         # set chunks
-        batch_size = train_chunk.chunk_size
+        batch_size = train_generator.batch_size
 
         self._dev_flag = False
-        if dev_chunk is not None:
-            self.dev_chunk = dev_chunk
+        if dev_generator is not None:
+            self.dev_generator = dev_generator
             self._dev_flag = True
 
         # add rounds
@@ -212,7 +214,7 @@ class ChunkNN:
             # set a seed for sampling batches for loss
             rng2 = np.random.default_rng(self._batch_seed)
             #start_gen = time.time()
-            for X_train, y_train in train_chunk.generate():
+            for X_train, y_train in train_generator.generate():
                 #end_gen = time.time()
                 #print(f"gen time {end_gen-start_gen}")
 
@@ -237,7 +239,7 @@ class ChunkNN:
             if epoch % epoch_gap == 0:
                 gap_start_time = time.time()
                 
-                epoch_train_cost = self.chunk_cost(self.train_chunk)
+                epoch_train_cost = self.generator_cost(self.train_generator)
                 self._train_costs.append(epoch_train_cost)
 
                 if verbose:
@@ -245,7 +247,7 @@ class ChunkNN:
                     print(f"\t Training cost: {epoch_train_cost}")
 
                 if self._dev_flag:
-                    epoch_dev_cost = self.chunk_cost(self.dev_chunk)
+                    epoch_dev_cost = self.generator_cost(self.dev_generator)
                     self._dev_costs.append(epoch_dev_cost)
                     if verbose:
                         print(f"\t Dev cost: {epoch_dev_cost}")
@@ -265,7 +267,7 @@ class ChunkNN:
 
             self._epoch += 1
             if model_path:
-                self.save_model(model_path, train_chunk, dev_chunk)
+                self.save_model(model_path, train_generator, dev_generator)
 
             if display and display_path:
                 fig.savefig(display_path)
@@ -375,23 +377,31 @@ class ChunkNN:
             cost = cost + self.reg_strength * sum(np.sum(layer._weights ** 2) for layer in self.layers if isinstance(layer, nn_layers.Web))
 
         return cost
-    
-    def chunk_cost(self, eval_chunk):
+
+    def generator_cost(self, eval_generator):
         """"Calculate loss on the eval chunk"""
         
-        loss_sum = 0
-        length = 0
+        if isinstance(eval_generator, no_resources2.MiniBatchGenerator):
+            
+            cost = self.cost(eval_generator.X, eval_generator.y)
 
-        for X_data, y_data in eval_chunk.generate():
-            y_probs = self.predict_prob(X_data)
+        else:
 
-            chunk_cost_sum = np.sum(self.loss_layer.get_total_loss(y_probs, y_data))
-            chunk_length = X_data.shape[0]
+            loss_sum = 0
+            length = 0
 
-            loss_sum += chunk_cost_sum
-            length += chunk_length
+            for X_data, y_data in eval_generator.generate():
+                y_probs = self.predict_prob(X_data)
 
-        return loss_sum / length
+                generator_cost_sum = np.sum(self.loss_layer.get_total_loss(y_probs, y_data))
+                chunk_length = X_data.shape[0]
+
+                loss_sum += generator_cost_sum
+                length += chunk_length
+            
+            cost = loss_sum / length
+
+        return cost
     
     def predict_prob(self, X):
         """Obtain output layer activations
@@ -452,12 +462,118 @@ class ChunkNN:
 
         return accuracy
     
-    def save_model(self, path, train_chunk, dev_chunk):
-        self.train_chunk = None
-        self.dev_chunk = None
+    def class_report(self, eval_chunk):
+        """Create classification matrix for the given chunk.
+        
+        Args:
+            eval_chunk (Chunk) : chunk to generate classification matrix for. 
+                True labels along 0 axis and predicted labels along 1st axis.
+
+        Returns:
+            sorted_labels_key (dict) : {label value : idx} dictionary key for matrices
+            report (numpy array) : classification matrix for the chunk
+        """
+        # hold classification matrix coordinates (true label, predicted label) -> count
+        report_dict = {}
+
+        # separate report dict and labels in case labels are not 0 indexes
+        labels = set()
+
+        for X_eval, y_eval in eval_chunk.generate():
+
+            y_pred_eval = super().predict_labels(X_eval)
+
+            if not isinstance(self.loss, node_funcs.BCE):
+                y_eval = np.argmax(y_eval, axis=1)
+
+            for true_label, pred_label in zip(y_eval, y_pred_eval):
+                true_label = int(true_label)
+                pred_label = int(pred_label)
+                report_dict[(true_label, pred_label)] = report_dict.get((true_label, pred_label), 0) + 1
+
+                labels.add(true_label)
+                labels.add(pred_label)
+        
+        num_labels = len(labels)
+        sorted_labels = sorted(list(labels))
+        sorted_labels_key = {label: idx for idx, label in enumerate(sorted_labels)}
+        
+        report = np.zeros((num_labels, num_labels), dtype=int)
+
+        for true_label, pred_label in report_dict:
+            pair_count = report_dict[(true_label, pred_label)]
+            report_idx = (sorted_labels_key[true_label], sorted_labels_key[pred_label])
+
+            report[report_idx] = pair_count
+
+        precisions = report.diagonal() / report.sum(axis=0)
+        recalls = report.diagonal() / report.sum(axis=1)
+        f1s = (2 * precisions * recalls) / (precisions + recalls + self._stable_constant)
+
+        return sorted_labels_key, report, f1s
+    
+    def save_model(self, path, train_generator, dev_generator):
+        self.train_generator = None
+        self.dev_generator = None
         joblib.dump(self, path)
-        self.train_chunk = train_chunk
-        self.dev_chunk = dev_chunk
+        self.train_generator = train_generator
+        self.dev_generator = dev_generator
     
 
+class SuperChunkNN(ChunkNN):
 
+    def fit(self,
+            chunk_manager,
+            dev_key=None,
+            learning_scheduler=learning_funcs.ConstantRate(1),
+            reg_strength=0,
+            num_epochs=30,
+            epoch_gap=5,
+            batch_prob=.01,
+            batch_seed=100,
+            model_path=None,
+            display_path=None,
+            verbose=True, 
+            display=True):
+
+        super()._fit_clear(learning_scheduler, batch_prob, batch_seed, verbose)
+
+        self.refine(chunk_manager=chunk_manager,
+                    reg_strength=reg_strength,
+                    num_epochs=num_epochs,
+                    epoch_gap=epoch_gap,
+                    model_path=model_path,
+                    display_path=display_path,
+                    verbose=verbose, 
+                    display=display)
+    
+    def refine(self,
+                chunk_manager,
+                dev_key=None,
+                reg_strength=None,
+                num_epochs=15,
+                epoch_gap=5,
+                model_path=None,
+                display_path=None,
+                verbose=True, 
+                display=True):
+
+        train_generator = no_resources2.ChunkManagerChild(chunk_manager, chunk_manager.train_key, train_generator=True)
+
+        if dev_key is not None:
+            dev_generator = no_resources2.ChunkManagerChild(chunk_manager, dev_key)
+        else:
+            dev_generator = None
+
+        super().refine(train_generator=train_generator,
+                        dev_generator=dev_generator,
+                        reg_strength=reg_strength,
+                        num_epochs=num_epochs,
+                        epoch_gap=epoch_gap,
+                        model_path=model_path,
+                        display_path=display_path,
+                        verbose=verbose, 
+                        display=display)
+        
+    def class_report(self):
+        pass
