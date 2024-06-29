@@ -214,6 +214,7 @@ class JarOpener:
     def __exit__(self, exc_type, exc_value, exc_traceback):
         if self.open_source:
             self.open_source.close()
+            self.open_source = None
         if exc_type and exc_type != GeneratorExit:
             print(f"An exception occurred: {exc_value}")
             traceback.print_exception(exc_type, exc_value, exc_traceback)
@@ -246,6 +247,7 @@ class PreDataGenerator:
         self._input_flag=True
 
         # get the opener function
+        self.input_path = input_path
         self._input_jar = JarOpener(input_path)
 
         # select all columns if no data columns
@@ -272,6 +274,7 @@ class PreDataGenerator:
         self._output_flag = True
 
         # get the opener function
+        self.output_path = output_path
         self._output_jar = JarOpener(output_path)
 
         self._data_output_selector = data_selector
@@ -462,8 +465,8 @@ class MiniBatchGenerator(PreDataGenerator):
                 self._train_std = X_data.std(axis=0)
 
             if self._train_generator or self._linked_generator:
-                X_data = (X_data - self._train_mean) / self._train_std
-                #X_data = (X_data - 33.3183) / 78.567
+                #X_data = (X_data - self._train_mean) / self._train_std
+                X_data = (X_data - 33.3183) / 78.567
 
         self.X, self.y = X_data, y_data
 
@@ -668,8 +671,8 @@ class Chunk(PreDataGenerator):
 
             if self._standardize:
                 if self._train_generator or self._linked_generator:
-                    X_data = (X_data - self._train_mean) / self._train_std
-                    #X_data = (X_data - 33.3183) / 78.567
+                    #X_data = (X_data - self._train_mean) / self._train_std
+                    X_data = (X_data - 33.3183) / 78.567
 
             yield X_data, y_data
 

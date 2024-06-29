@@ -104,6 +104,8 @@ class ChunkNN:
             display_path=None,
             verbose=True, 
             display=True):
+        
+        self._fit_clear(learning_scheduler, batch_prob, batch_seed, verbose)
 
         self.refine(train_generator=train_generator,
                     dev_generator=dev_generator,
@@ -213,15 +215,15 @@ class ChunkNN:
 
             # set a seed for sampling batches for loss
             rng2 = np.random.default_rng(self._batch_seed)
-            #start_gen = time.time()
+            # start_gen = time.time()
             for X_train, y_train in train_generator.generate():
-                #end_gen = time.time()
-                #print(f"gen time {end_gen-start_gen}")
+                # end_gen = time.time()
+                # print(f"gen time {end_gen-start_gen}")
 
-                #start_batch = time.time()
+                # start_batch = time.time()
                 self._batch_total_pass(X_train, y_train)
-                #end_batch = time.time()
-                #print(f"batch time: {end_batch-start_batch}")
+                # end_batch = time.time()
+                # print(f"batch time: {end_batch-start_batch}")
                 
                 if verbose:
                     if rng2.binomial(1, self._batch_prob):
@@ -229,7 +231,7 @@ class ChunkNN:
 
                         print(f"\t Sampled batch loss: {sampled_batch_loss}")
                 
-                #start_gen = time.time()
+                start_gen = time.time()
 
             epoch_end_time = time.time()
             if verbose:
@@ -267,7 +269,7 @@ class ChunkNN:
 
             self._epoch += 1
             if model_path:
-                self.save_model(model_path, train_generator, dev_generator)
+                self.save_model(model_path)
 
             if display and display_path:
                 fig.savefig(display_path)
@@ -474,51 +476,86 @@ class ChunkNN:
             report (numpy array) : classification matrix for the chunk
         """
         # hold classification matrix coordinates (true label, predicted label) -> count
-        report_dict = {}
+        class_matrix_dict = {}
 
         # separate report dict and labels in case labels are not 0 indexes
         labels = set()
 
         for X_eval, y_eval in eval_chunk.generate():
-
-            y_pred_eval = super().predict_labels(X_eval)
-
-            if not isinstance(self.loss, node_funcs.BCE):
-                y_eval = np.argmax(y_eval, axis=1)
-
-            for true_label, pred_label in zip(y_eval, y_pred_eval):
-                true_label = int(true_label)
-                pred_label = int(pred_label)
-                report_dict[(true_label, pred_label)] = report_dict.get((true_label, pred_label), 0) + 1
-
-                labels.add(true_label)
-                labels.add(pred_label)
+            
+            self._modify_labels_and_class_matrix_dict(X_eval,y_eval,labels,class_matrix_dict)
         
-        num_labels = len(labels)
+        sorted_labels_key, class_matrix, f1s = self._create_report_items(class_matrix_dict, labels)
+
+        return sorted_labels_key, class_matrix, f1s
+  
+    def _modify_labels_and_class_matrix_dict(self, X_eval, y_eval, labels, class_matrix_dict):
+
+        y_pred_eval = self.predict_labels(X_eval)
+
+        if not isinstance(self.loss_layer.loss_func, node_funcs.BCE):
+            y_eval = np.argmax(y_eval, axis=1)
+
+        for true_label, pred_label in zip(y_eval, y_pred_eval):
+            true_label = int(true_label)
+            pred_label = int(pred_label)
+
+            class_matrix_dict[(true_label, pred_label)] = class_matrix_dict.get((true_label, pred_label), 0) + 1
+
+            labels.add(true_label)
+            labels.add(pred_label)
+
+    def _create_report_items(self, class_matrix_dict, labels):
+        sorted_labels_key = self._create_sorted_labels_key(labels)
+        class_matrix = self._create_class_matrix(class_matrix_dict, sorted_labels_key)
+        f1s = self._create_f1s(class_matrix)
+
+        return sorted_labels_key, class_matrix, f1s
+
+    @staticmethod
+    def _create_sorted_labels_key(labels):
         sorted_labels = sorted(list(labels))
         sorted_labels_key = {label: idx for idx, label in enumerate(sorted_labels)}
+
+        return sorted_labels_key
+    
+    @staticmethod
+    def _create_class_matrix(class_matrix_dict, sorted_labels_key):
+
+        num_labels = len(sorted_labels_key)
+
+        class_matrix = np.zeros((num_labels, num_labels), dtype=int)
+
+        for true_label, pred_label in class_matrix_dict:
+            pair_count = class_matrix_dict[(true_label, pred_label)]
+            class_matrix_idx = (sorted_labels_key[true_label], sorted_labels_key[pred_label])
+
+            class_matrix[class_matrix_idx] = pair_count
         
-        report = np.zeros((num_labels, num_labels), dtype=int)
+        return class_matrix
 
-        for true_label, pred_label in report_dict:
-            pair_count = report_dict[(true_label, pred_label)]
-            report_idx = (sorted_labels_key[true_label], sorted_labels_key[pred_label])
-
-            report[report_idx] = pair_count
-
-        precisions = report.diagonal() / report.sum(axis=0)
-        recalls = report.diagonal() / report.sum(axis=1)
+    def _create_f1s(self, class_matrix):
+        precisions = class_matrix.diagonal() / class_matrix.sum(axis=0)
+        recalls = class_matrix.diagonal() / class_matrix.sum(axis=1)
         f1s = (2 * precisions * recalls) / (precisions + recalls + self._stable_constant)
 
-        return sorted_labels_key, report, f1s
+        return f1s
     
-    def save_model(self, path, train_generator, dev_generator):
-        self.train_generator = None
-        self.dev_generator = None
+    def save_model(self, path):
         joblib.dump(self, path)
-        self.train_generator = train_generator
-        self.dev_generator = dev_generator
-    
+
+    @classmethod
+    def load_model(cls, path):
+        potential_model = joblib.load(path)
+        if type(potential_model) != cls:
+            raise Exception("New model must be of the type called")
+        potential_model._loaded_model = True
+        
+        # clear graphing data
+        potential_model._train_collection = []
+        potential_model._dev_collection = []
+        return potential_model
+
 
 class SuperChunkNN(ChunkNN):
 
@@ -539,6 +576,7 @@ class SuperChunkNN(ChunkNN):
         super()._fit_clear(learning_scheduler, batch_prob, batch_seed, verbose)
 
         self.refine(chunk_manager=chunk_manager,
+                    dev_key=dev_key,
                     reg_strength=reg_strength,
                     num_epochs=num_epochs,
                     epoch_gap=epoch_gap,
@@ -548,7 +586,7 @@ class SuperChunkNN(ChunkNN):
                     display=display)
     
     def refine(self,
-                chunk_manager,
+                chunk_manager=None,
                 dev_key=None,
                 reg_strength=None,
                 num_epochs=15,
@@ -557,13 +595,16 @@ class SuperChunkNN(ChunkNN):
                 display_path=None,
                 verbose=True, 
                 display=True):
+        
+        if chunk_manager is not None:
+            self.chunk_manager = chunk_manager
 
-        train_generator = no_resources2.ChunkManagerChild(chunk_manager, chunk_manager.train_key, train_generator=True)
+            train_generator = no_resources2.ChunkManagerChild(chunk_manager, chunk_manager.train_key, train_generator=True)
 
-        if dev_key is not None:
-            dev_generator = no_resources2.ChunkManagerChild(chunk_manager, dev_key)
-        else:
-            dev_generator = None
+            if dev_key is not None:
+                dev_generator = no_resources2.ChunkManagerChild(chunk_manager, dev_key)
+            else:
+                dev_generator = None
 
         super().refine(train_generator=train_generator,
                         dev_generator=dev_generator,
@@ -576,4 +617,27 @@ class SuperChunkNN(ChunkNN):
                         display=display)
         
     def class_report(self):
-        pass
+
+        class_matrix_dict_of_dicts = {set_name:dict() for set_name in self.chunk_manager.data_split.keys()}
+
+        labels_dict = {set_name:set() for set_name in self.chunk_manager.data_split.keys()}
+
+        for chunk_data_dict in self.chunk_manager.generate_all():
+            for set_name, data_chunk in chunk_data_dict.items():
+                
+                class_matrix_dict = class_matrix_dict_of_dicts[set_name]
+                labels = labels_dict[set_name]
+
+                X_eval, y_eval = data_chunk
+
+                self._modify_labels_and_class_matrix_dict(X_eval, y_eval, labels, class_matrix_dict)
+
+        report_items_dict = dict()
+
+        for set_name in self.chunk_manager.data_split.keys():
+            labels = labels_dict[set_name]
+            class_matrix_dict = class_matrix_dict_of_dicts[set_name]
+
+            report_items_dict[set_name] = self._create_report_items(class_matrix_dict, labels)
+
+        return report_items_dict

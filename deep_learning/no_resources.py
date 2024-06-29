@@ -404,8 +404,8 @@ class Chunk:
     def generate(self):
 
         """threaded generation, minimal speed increase"""
-        input_queue = queue.Queue(maxsize=10)
-        output_queue = queue.Queue(maxsize=10)
+        input_queue = queue.Queue(maxsize=20)
+        output_queue = queue.Queue(maxsize=20)
 
         input_thread = threading.Thread(target=self.build_queue, args=(input_queue, self.generate_input_data()), daemon=True)
         output_thread = threading.Thread(target=self.build_queue, args=(output_queue, self.generate_output_data()), daemon=True)
@@ -430,8 +430,8 @@ class Chunk:
 
             if self._standardize:
                 if self._train_generator or self._linked_chunk:
-                    #X_data = (X_data - self._train_mean) / self._train_std
-                    X_data = (X_data - 33.3183) / 78.567
+                    X_data = (X_data - self._train_mean) / self._train_std
+                    #X_data = (X_data - 33.3183) / 78.567
 
             yield X_data, y_data
 
